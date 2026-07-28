@@ -13,7 +13,7 @@
     "install:panel": "npm install --legacy-peer-deps",
     "install:force": "npm install --force",
     "test": "echo \"Error: no test specified\" && exit 1",
-    "docker:build": "docker build -t docker run -e SESSION_ID=$SESSION_ID x-hunter-bot"
+    "docker:build": "docker build -t x-hunter-bot ."
   },
   "keywords": [
     "whatsapp-bot",
@@ -28,7 +28,7 @@
     "@ffmpeg/ffmpeg": "^0.12.15",
     "@hapi/boom": "^10.0.1",
     "@types/node": "^20.0.0",
-    "@whiskeysockets/baileys": "^v7.0.0-rc.9",
+    "@whiskeysockets/baileys": "7.0.0-rc.9",
     "awesome-phonenumber": "^5.9.0",
     "axios": "^1.18.1",
     "chalk": "^4.1.2",
@@ -80,6 +80,6 @@
     "jimp": "^1.6.0"
   },
   "engines": {
-    "node": ">=20.0.0"
+    "node": ">=18.0.0 <=20.x.x"
   }
 }
