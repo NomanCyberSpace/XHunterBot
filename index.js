@@ -9,6 +9,9 @@
  * - HUNTER LIBRARY by @UET LAHORE 
  * - Pair Code implementation inspired by TechGod143 & DGXEON
  */
+const { File } = require('node:buffer');
+globalThis.File = globalThis.File || File;
+
 require('./settings')
 const { Boom } = require('@hapi/boom')
 const fs = require('fs')
