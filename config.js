@@ -23,8 +23,9 @@ global.APIKeys = {
     'https://api-fgmods.ddns.net': 'fg-dylux'
 };
 
-module.exports = {
+  module.exports = {
     WARN_COUNT: 3,
+    MONGODB_URL: process.env.MONGODB_URL || '',
     APIs: global.APIs,
     APIKeys: global.APIKeys
 };
