@@ -12,7 +12,8 @@
 const { File } = require('node:buffer');
 globalThis.File = globalThis.File || File;
 
-require('./settings')
+// 1. Require Settings First!
+const settings = require('./settings')
 const { Boom } = require('@hapi/boom')
 const fs = require('fs')
 const chalk = require('chalk')
@@ -79,7 +80,6 @@ const store = require('./lib/lightweight_store')
 
 // Initialize store
 store.readFromFile()
-const settings = require('./settings')
 setInterval(() => store.writeToFile(), settings.storeWriteInterval || 10000)
 
 // Memory optimization - Force garbage collection if available
