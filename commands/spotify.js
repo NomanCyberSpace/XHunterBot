@@ -1,6 +1,11 @@
 const axios = require('axios');
 const yts = require('yt-search');
 
+const AXIOS_HEADERS = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Accept': '*/*'
+};
+
 async function spotifyCommand(sock, chatId, message) {
     try {
         const rawText = message.message?.conversation?.trim() ||
@@ -13,7 +18,7 @@ async function spotifyCommand(sock, chatId, message) {
         const query = rawText.slice(used.length).trim();
 
         if (!query) {
-            await sock.sendMessage(chatId, { text: 'Usage: .spotify <song/artist/keywords>\nExample: .spotify con calma' }, { quoted: message });
+            await sock.sendMessage(chatId, { text: 'Usage: .spotify <song/artist/keywords>\nExample: .spotify pal pal' }, { quoted: message });
             return;
         }
 
@@ -24,7 +29,7 @@ async function spotifyCommand(sock, chatId, message) {
         let artistName = '';
         let coverImg = '';
 
-        // Step 1: Search track details on Spotify via RapidAPI
+        // Step 1: RapidAPI Spotify Search for Metadata
         try {
             const searchOptions = {
                 method: 'GET',
@@ -44,55 +49,81 @@ async function spotifyCommand(sock, chatId, message) {
                 coverImg = track.albumOfTrack?.coverArt?.sources?.[0]?.url || '';
             }
         } catch (e) {
-            console.log('Spotify RapidAPI search failed, falling back to query');
+            console.log('RapidAPI Spotify Search failed, using raw query');
         }
 
-        // Step 2: Audio Download Fallback System
+        // Step 2: YouTube Search for matching audio
+        const searchYt = await yts(`${songTitle} ${artistName}`);
+        if (!searchYt?.videos?.length) {
+            throw new Error('No audio found for this song');
+        }
+        
+        const ytVideo = searchYt.videos[0];
+        const ytUrl = ytVideo.url;
+        if (!coverImg) coverImg = ytVideo.thumbnail;
+
         let audioUrl = null;
 
-        // Try API 1 (Keith API)
+        // API Method 1: Yupra API
         try {
-            const searchYt = await yts(`${songTitle} ${artistName}`);
-            if (searchYt?.videos?.length > 0) {
-                const ytUrl = searchYt.videos[0].url;
-                if (!coverImg) coverImg = searchYt.videos[0].thumbnail;
-
-                const res1 = await axios.get(`https://apis-keith.vercel.app/download/dlmp3?url=${ytUrl}`, { timeout: 15000 });
-                if (res1.data?.status && res1.data?.result?.downloadUrl) {
-                    audioUrl = res1.data.result.downloadUrl;
-                }
+            const res = await axios.get(`https://api.yupra.my.id/api/downloader/ytmp3?url=${encodeURIComponent(ytUrl)}`, { headers: AXIOS_HEADERS, timeout: 15000 });
+            if (res.data?.success && res.data?.data?.download_url) {
+                audioUrl = res.data.data.download_url;
             }
-        } catch (err1) {
-            console.log('API 1 download failed, trying API 2...');
+        } catch (e) {
+            console.log('API 1 (Yupra) failed');
         }
 
-        // Try API 2 (Okatsu Spotify API) if API 1 failed
+        // API Method 2: EliteProTech API
         if (!audioUrl) {
             try {
-                const dlUrl = `https://okatsu-rolezapiiz.vercel.app/search/spotify?q=${encodeURIComponent(songTitle + ' ' + artistName)}`;
-                const { data: dlData } = await axios.get(dlUrl, { timeout: 15000, headers: { 'user-agent': 'Mozilla/5.0' } });
-                if (dlData?.result?.audio) {
-                    audioUrl = dlData.result.audio;
+                const res = await axios.get(`https://eliteprotech-apis.zone.id/ytdown?url=${encodeURIComponent(ytUrl)}&format=mp3`, { headers: AXIOS_HEADERS, timeout: 15000 });
+                if (res.data?.success && res.data?.downloadURL) {
+                    audioUrl = res.data.downloadURL;
                 }
-            } catch (err2) {
-                console.log('API 2 download failed');
+            } catch (e) {
+                console.log('API 2 (EliteProTech) failed');
+            }
+        }
+
+        // API Method 3: Keith API
+        if (!audioUrl) {
+            try {
+                const res = await axios.get(`https://apis-keith.vercel.app/download/dlmp3?url=${encodeURIComponent(ytUrl)}`, { headers: AXIOS_HEADERS, timeout: 15000 });
+                if (res.data?.status && res.data?.result?.downloadUrl) {
+                    audioUrl = res.data.result.downloadUrl;
+                }
+            } catch (e) {
+                console.log('API 3 (Keith) failed');
+            }
+        }
+
+        // API Method 4: Okatsu Spotify Direct
+        if (!audioUrl) {
+            try {
+                const res = await axios.get(`https://okatsu-rolezapiiz.vercel.app/search/spotify?q=${encodeURIComponent(songTitle + ' ' + artistName)}`, { headers: AXIOS_HEADERS, timeout: 15000 });
+                if (res.data?.result?.audio) {
+                    audioUrl = res.data.result.audio;
+                }
+            } catch (e) {
+                console.log('API 4 (Okatsu) failed');
             }
         }
 
         if (!audioUrl) {
-            throw new Error('All audio download sources failed');
+            throw new Error('All 4 downloader APIs failed');
         }
 
-        const caption = `🎧 *Title:* ${songTitle}\n👤 *Artist:* ${artistName || 'Unknown'}\n🟢 *Status:* Downloaded`.trim();
+        const caption = `🎧 *Title:* ${songTitle}\n👤 *Artist:* ${artistName || 'Unknown'}\n🟢 *Status:* Downloaded Successfully!`.trim();
 
-        // Send Album Cover / Thumbnail
+        // Send Cover Art
         if (coverImg) {
             await sock.sendMessage(chatId, { image: { url: coverImg }, caption }, { quoted: message });
         } else {
             await sock.sendMessage(chatId, { text: caption }, { quoted: message });
         }
 
-        // Send MP3 Audio
+        // Send MP3 Audio File
         await sock.sendMessage(chatId, {
             audio: { url: audioUrl },
             mimetype: 'audio/mpeg',
@@ -101,7 +132,7 @@ async function spotifyCommand(sock, chatId, message) {
 
     } catch (error) {
         console.error('[SPOTIFY] error:', error?.message || error);
-        await sock.sendMessage(chatId, { text: '❌ Failed to fetch song. Please try again with another keyword.' }, { quoted: message });
+        await sock.sendMessage(chatId, { text: '❌ Failed to fetch song. Download sources down, please try another query.' }, { quoted: message });
     }
 }
 
