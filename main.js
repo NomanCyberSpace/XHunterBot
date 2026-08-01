@@ -976,8 +976,15 @@ async function handleMessages(sock, messageUpdate, printLog) {
                 await videoCommand(sock, chatId, message);
                 break;
             case userMessage.startsWith('.tiktok') || userMessage.startsWith('.tt'):
-                await tiktokCommand(sock, chatId, message);
-                break;
+    {
+            const tiktokUrl = rawText.split(/\s+/)[1] || userMessage.split(/\s+/)[1];
+            if (tiktokCommand.tiktokDownloadCommand) {
+            await tiktokCommand.tiktokDownloadCommand(sock, chatId, tiktokUrl, message);
+            } else if (typeof tiktokCommand === 'function') {
+            await tiktokCommand(sock, chatId, message);
+        }
+    }
+    break;
             case userMessage.startsWith('.gpt') || userMessage.startsWith('.gemini'):
                 await aiCommand(sock, chatId, message);
                 break;

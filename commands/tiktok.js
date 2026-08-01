@@ -11,17 +11,32 @@ async function tiktokDownloadCommand(sock, chatId, tiktokUrl, message) {
         let videoUrl = null;
         let title = "TikTok Video";
 
+        // Resolve shortened links like vt.tiktok.com
+        let resolvedUrl = tiktokUrl;
         try {
-            const res = await axios.get(`https://api.davidcyriltech.my.id/download/tiktok?url=${encodeURIComponent(tiktokUrl)}`);
+            const headRes = await axios.get(tiktokUrl, {
+                headers: { 'User-Agent': 'Mozilla/5.0' },
+                maxRedirects: 5,
+                timeout: 10000
+            });
+            if (headRes.request?.res?.responseUrl) {
+                resolvedUrl = headRes.request.res.responseUrl;
+            }
+        } catch (e) {}
+
+        // API 1: DavidCyril API
+        try {
+            const res = await axios.get(`https://api.davidcyriltech.my.id/download/tiktok?url=${encodeURIComponent(resolvedUrl)}`, { timeout: 15000 });
             if (res.data?.success && res.data?.result) {
                 videoUrl = res.data.result.play || res.data.result.hdplay;
                 title = res.data.result.title || title;
             }
         } catch (e) {}
 
+        // API 2: BK9 API
         if (!videoUrl) {
             try {
-                const bkRes = await axios.get(`https://bk9.fun/download/tiktok?url=${encodeURIComponent(tiktokUrl)}`);
+                const bkRes = await axios.get(`https://bk9.fun/download/tiktok?url=${encodeURIComponent(resolvedUrl)}`, { timeout: 15000 });
                 if (bkRes.data?.status && bkRes.data?.BK9?.BK9) {
                     videoUrl = bkRes.data.BK9.BK9;
                 }
