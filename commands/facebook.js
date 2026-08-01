@@ -11,38 +11,49 @@ async function facebookCommand(sock, chatId, message) {
 
         await sock.sendMessage(chatId, { react: { text: '⏳', key: message.key } });
 
-        // Resolve redirect share links (e.g. facebook.com/share/r/...)
+        // Unpack share links (facebook.com/share/r/...)
+        let cleanUrl = url;
         try {
             const headRes = await axios.get(url, {
                 headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' },
-                maxRedirects: 5,
-                timeout: 10000
+                maxRedirects: 10,
+                timeout: 8000
             });
             if (headRes.request?.res?.responseUrl) {
-                url = headRes.request.res.responseUrl;
+                cleanUrl = headRes.request.res.responseUrl;
             }
         } catch (e) {}
 
         let videoUrl = null;
 
-        // API 1: DavidCyril API
+        // Server 1: SnapSave/FB Downloader Engine
         try {
-            const res = await axios.get(`https://api.davidcyriltech.my.id/download/facebook?url=${encodeURIComponent(url)}`, { timeout: 15000 });
-            if (res.data?.success && res.data?.result) {
-                videoUrl = res.data.result.hd || res.data.result.sd || res.data.result.video;
+            const res = await axios.get(`https://api.vreden.web.id/api/fbdl?url=${encodeURIComponent(cleanUrl)}`, { timeout: 12000 });
+            if (res.data?.result) {
+                videoUrl = res.data.result.hd || res.data.result.sd || res.data.result.url;
             }
         } catch (e) {}
 
-        // API 2: RapidAPI Social Media Video Downloader
+        // Server 2: DavidCyril API
+        if (!videoUrl) {
+            try {
+                const res = await axios.get(`https://api.davidcyriltech.my.id/download/facebook?url=${encodeURIComponent(cleanUrl)}`, { timeout: 12000 });
+                if (res.data?.success && res.data?.result) {
+                    videoUrl = res.data.result.hd || res.data.result.sd || res.data.result.video;
+                }
+            } catch (e) {}
+        }
+
+        // Server 3: RapidAPI
         if (!videoUrl) {
             try {
                 const res = await axios.get('https://social-media-video-downloader.p.rapidapi.com/facebook/video/details', {
-                    params: { url },
+                    params: { url: cleanUrl },
                     headers: {
                         'x-rapidapi-key': '1448ef7463msh769afae00da1a97p10823djsnbcc28cdffff6',
                         'x-rapidapi-host': 'social-media-video-downloader.p.rapidapi.com'
                     },
-                    timeout: 15000
+                    timeout: 12000
                 });
                 videoUrl = res.data?.hd_url || res.data?.sd_url;
             } catch (e) {}
@@ -58,7 +69,7 @@ async function facebookCommand(sock, chatId, message) {
 
     } catch (err) {
         console.error('FB Error:', err.message);
-        await sock.sendMessage(chatId, { text: "❌ Failed to download Facebook video. Ensure the video is public." }, { quoted: message });
+        await sock.sendMessage(chatId, { text: "❌ Failed to download Facebook video. Ensure link is public." }, { quoted: message });
     }
 }
 

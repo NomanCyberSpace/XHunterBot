@@ -11,39 +11,62 @@ async function tiktokDownloadCommand(sock, chatId, tiktokUrl, message) {
         let videoUrl = null;
         let title = "TikTok Video";
 
-        // Resolve shortened links like vt.tiktok.com
-        let resolvedUrl = tiktokUrl;
+        // Unpack shortened link (vt.tiktok.com)
+        let cleanUrl = tiktokUrl;
         try {
-            const headRes = await axios.get(tiktokUrl, {
-                headers: { 'User-Agent': 'Mozilla/5.0' },
+            const redirectCheck = await axios.get(tiktokUrl, {
+                headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' },
                 maxRedirects: 5,
+                timeout: 8000
+            });
+            if (redirectCheck.request?.res?.responseUrl) {
+                cleanUrl = redirectCheck.request.res.responseUrl;
+            }
+        } catch (e) {}
+
+        // Server 1: TikWM (Most Reliable Free TikTok API)
+        try {
+            const res = await axios.post('https://www.tikwm.com/api/', new URLSearchParams({ url: cleanUrl }), {
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8' },
                 timeout: 10000
             });
-            if (headRes.request?.res?.responseUrl) {
-                resolvedUrl = headRes.request.res.responseUrl;
+            if (res.data?.data?.play) {
+                videoUrl = res.data.data.play;
+                title = res.data.data.title || title;
             }
-        } catch (e) {}
+        } catch (e) {
+            console.log("TikWM API failed");
+        }
 
-        // API 1: DavidCyril API
-        try {
-            const res = await axios.get(`https://api.davidcyriltech.my.id/download/tiktok?url=${encodeURIComponent(resolvedUrl)}`, { timeout: 15000 });
-            if (res.data?.success && res.data?.result) {
-                videoUrl = res.data.result.play || res.data.result.hdplay;
-                title = res.data.result.title || title;
-            }
-        } catch (e) {}
-
-        // API 2: BK9 API
+        // Server 2: BK9 Fallback
         if (!videoUrl) {
             try {
-                const bkRes = await axios.get(`https://bk9.fun/download/tiktok?url=${encodeURIComponent(resolvedUrl)}`, { timeout: 15000 });
+                const bkRes = await axios.get(`https://bk9.fun/download/tiktok?url=${encodeURIComponent(cleanUrl)}`, { timeout: 10000 });
                 if (bkRes.data?.status && bkRes.data?.BK9?.BK9) {
                     videoUrl = bkRes.data.BK9.BK9;
                 }
             } catch (e) {}
         }
 
-        if (!videoUrl) throw new Error("TikTok download failed");
+        // Server 3: RapidAPI Social Media Video Downloader
+        if (!videoUrl) {
+            try {
+                const options = {
+                    method: 'GET',
+                    url: 'https://social-media-video-downloader.p.rapidapi.com/tiktok/video/details',
+                    params: { url: cleanUrl },
+                    headers: {
+                        'x-rapidapi-key': '1448ef7463msh769afae00da1a97p10823djsnbcc28cdffff6',
+                        'x-rapidapi-host': 'social-media-video-downloader.p.rapidapi.com'
+                    },
+                    timeout: 10000
+                };
+                const res = await axios.request(options);
+                videoUrl = res.data?.play || res.data?.video || res.data?.url;
+            } catch (e) {}
+        }
+
+        if (!videoUrl) throw new Error("All TikTok downloader servers failed");
 
         await sock.sendMessage(chatId, {
             video: { url: videoUrl },
@@ -52,7 +75,7 @@ async function tiktokDownloadCommand(sock, chatId, tiktokUrl, message) {
 
     } catch (error) {
         console.error('TikTok Error:', error.message);
-        await sock.sendMessage(chatId, { text: '❌ TikTok video download karne mein masla hua.' }, { quoted: message });
+        await sock.sendMessage(chatId, { text: '❌ TikTok video fetch nahi ho saki. Direct video link try karein.' }, { quoted: message });
     }
 }
 
