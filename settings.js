@@ -3,7 +3,7 @@ const settings = {
   author: 'XHUNTERBOT',
   botName: "XHUNTERBOT",
   botOwner: 'XHUNTERBOT 👿', 
-  ownerNumber: '41783420049', 
+  ownerNumber: '923097498072', 
   giphyApiKey: 'qnl7ssQChTdPjsKta2Ax2LMaGXz303tq',
   commandMode: "private",
   maxStoreMessages: 20, 
