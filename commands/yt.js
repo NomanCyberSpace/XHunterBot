@@ -1,7 +1,10 @@
 const yts = require('yt-search');
-const ytdl = require('ytdl-core');
-const fs = require('fs');
-const path = require('path');
+const axios = require('axios');
+
+const RAPID_HEADERS = {
+    'x-rapidapi-key': '1448ef7463msh769afae00da1a97p10823djsnbcc28cdffff6',
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'
+};
 
 const channelInfo = {
     contextInfo: {
@@ -15,7 +18,7 @@ const channelInfo = {
     }
 };
 
-// Song / Mp3 Downloader Command
+// Song / Mp3 Downloader Command (RapidAPI Supported)
 async function songCommand(sock, chatId, textQuery, message) {
     try {
         if (!textQuery) {
@@ -25,46 +28,61 @@ async function songCommand(sock, chatId, textQuery, message) {
             }, { quoted: message });
         }
 
-        await sock.sendMessage(chatId, { text: '🔍 *Searching song... Please wait!*' }, { quoted: message });
+        await sock.sendMessage(chatId, { text: '🎵 *Searching & downloading audio...*' }, { quoted: message });
 
         const searchResult = await yts(textQuery);
-        const video = searchResult.videos[0];
+        const video = searchResult.videos?.[0];
 
         if (!video) {
             return await sock.sendMessage(chatId, { text: '❌ No results found on YouTube!' }, { quoted: message });
         }
 
-        const stream = ytdl(video.url, { filter: 'audioonly', quality: 'highestaudio' });
-        const filePath = path.join(__dirname, `../temp/${Date.now()}.mp3`);
+        let audioUrl = null;
 
-        const fileStream = fs.createWriteStream(filePath);
-        stream.pipe(fileStream);
+        // Method 1: RapidAPI YT MP3 (Screenshot API)
+        try {
+            const res = await axios.get('https://yt-search-and-download-mp3.p.rapidapi.com/mp3', {
+                params: { id: video.videoId, url: video.url },
+                headers: {
+                    ...RAPID_HEADERS,
+                    'x-rapidapi-host': 'yt-search-and-download-mp3.p.rapidapi.com'
+                },
+                timeout: 20000
+            });
+            audioUrl = res.data?.link || res.data?.downloadUrl || res.data?.url;
+        } catch (err) {
+            console.log('RapidAPI MP3 failed, trying fallback...');
+        }
 
-        fileStream.on('finish', async () => {
-            await sock.sendMessage(chatId, {
-                audio: { url: filePath },
-                mimetype: 'audio/mp4',
-                fileName: `${video.title}.mp3`,
-                caption: `🎶 *Title:* ${video.title}\n⏱️ *Duration:* ${video.timestamp}\n🔗 *Link:* ${video.url}`,
-                ...channelInfo
-            }, { quoted: message });
+        // Method 2: Yupra API Fallback
+        if (!audioUrl) {
+            try {
+                const res2 = await axios.get(`https://api.yupra.my.id/api/downloader/ytmp3?url=${encodeURIComponent(video.url)}`, { timeout: 15000 });
+                if (res2.data?.success && res2.data?.data?.download_url) {
+                    audioUrl = res2.data.data.download_url;
+                }
+            } catch (err2) {}
+        }
 
-            // Temp file deletion
-            if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
-        });
+        if (!audioUrl) {
+            throw new Error('All audio download sources failed');
+        }
 
-        stream.on('error', (err) => {
-            console.error('YTDL Stream Error:', err);
-            sock.sendMessage(chatId, { text: '❌ Failed to download audio. Try again later.' });
-        });
+        await sock.sendMessage(chatId, {
+            audio: { url: audioUrl },
+            mimetype: 'audio/mpeg',
+            fileName: `${video.title.replace(/[\\/:*?"<>|]/g, '')}.mp3`,
+            caption: `🎶 *Title:* ${video.title}\n⏱️ *Duration:* ${video.timestamp}\n🔗 *Link:* ${video.url}`,
+            ...channelInfo
+        }, { quoted: message });
 
     } catch (error) {
-        console.error('Play/Song Error:', error);
-        await sock.sendMessage(chatId, { text: '❌ Error processing song command!' }, { quoted: message });
+        console.error('Play/Song Error:', error.message);
+        await sock.sendMessage(chatId, { text: '❌ Error processing song command! API down.' }, { quoted: message });
     }
 }
 
-// Video / Mp4 Downloader Command
+// Video / Mp4 Downloader Command (RapidAPI Supported)
 async function ytMp4Command(sock, chatId, textQuery, message) {
     try {
         if (!textQuery) {
@@ -77,30 +95,47 @@ async function ytMp4Command(sock, chatId, textQuery, message) {
         await sock.sendMessage(chatId, { text: '🎬 *Downloading video... Please wait!*' }, { quoted: message });
 
         const searchResult = await yts(textQuery);
-        const video = searchResult.videos[0];
+        const video = searchResult.videos?.[0];
 
         if (!video) {
             return await sock.sendMessage(chatId, { text: '❌ No video found!' }, { quoted: message });
         }
 
-        const stream = ytdl(video.url, { quality: '18' }); // 360p standard mp4
-        const filePath = path.join(__dirname, `../temp/${Date.now()}.mp4`);
+        let videoUrl = null;
 
-        const fileStream = fs.createWriteStream(filePath);
-        stream.pipe(fileStream);
+        // RapidAPI Social Media Video Downloader for MP4
+        try {
+            const res = await axios.get('https://social-media-video-downloader.p.rapidapi.com/youtube/v3/video/details', {
+                params: { videoId: video.videoId, urlAccess: 'normal' },
+                headers: {
+                    ...RAPID_HEADERS,
+                    'x-rapidapi-host': 'social-media-video-downloader.p.rapidapi.com'
+                },
+                timeout: 20000
+            });
+            if (res.data?.formats && Array.isArray(res.data.formats)) {
+                const mp4Format = res.data.formats.find(f => f.url && f.ext === 'mp4');
+                videoUrl = mp4Format?.url || res.data.formats[0]?.url;
+            } else if (res.data?.downloadUrl) {
+                videoUrl = res.data.downloadUrl;
+            }
+        } catch (err) {
+            console.log('RapidAPI Video failed');
+        }
 
-        fileStream.on('finish', async () => {
-            await sock.sendMessage(chatId, {
-                video: { url: filePath },
-                caption: `🎬 *Title:* ${video.title}\n⏱️ *Duration:* ${video.timestamp}`,
-                ...channelInfo
-            }, { quoted: message });
+        if (!videoUrl) {
+            throw new Error('Video download source failed');
+        }
 
-            if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
-        });
+        await sock.sendMessage(chatId, {
+            video: { url: videoUrl },
+            mimetype: 'video/mp4',
+            caption: `🎬 *Title:* ${video.title}\n⏱️ *Duration:* ${video.timestamp}`,
+            ...channelInfo
+        }, { quoted: message });
 
     } catch (error) {
-        console.error('YT Video Error:', error);
+        console.error('YT Video Error:', error.message);
         await sock.sendMessage(chatId, { text: '❌ Error downloading video!' }, { quoted: message });
     }
 }
