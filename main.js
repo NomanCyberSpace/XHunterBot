@@ -190,8 +190,12 @@ async function handleMessages(sock, messageUpdate, printLog) {
         const senderIsSudo = await isSudo(senderId);
         const senderIsOwnerOrSudo = await isOwnerOrSudo(senderId, sock, chatId);
 
-        // GLOBAL OWNER CHECK: TRUE IF MESSAGE IS FROM BOT NUMBER OR LISTED OWNER/SUDO
-        const isOwner = Boolean(message.key.fromMe || senderIsSudo || senderIsOwnerOrSudo);
+// Hardcode your owner numbers directly to override lib issues
+        const allowedOwners = ['923097498072', '923462809972', settings.ownerNumber];
+        const isDirectOwner = allowedOwners.some(num => num && senderId.includes(num.replace(/[^0-9]/g, '')));
+
+// GLOBAL OWNER CHECK
+        const isOwner = Boolean(message.key.fromMe || senderIsSudo || senderIsOwnerOrSudo || isDirectOwner);
 
         // Handle button responses
         if (message.message?.buttonsResponseMessage) {
