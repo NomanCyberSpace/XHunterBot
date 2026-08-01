@@ -190,11 +190,11 @@ async function handleMessages(sock, messageUpdate, printLog) {
         const senderIsSudo = await isSudo(senderId);
         const senderIsOwnerOrSudo = await isOwnerOrSudo(senderId, sock, chatId);
 
-// Hardcode your owner numbers directly to override lib issues
+        // Hardcode your owner numbers directly to override lib issues
         const allowedOwners = ['923097498072', '923462809972', settings.ownerNumber];
         const isDirectOwner = allowedOwners.some(num => num && senderId.includes(num.replace(/[^0-9]/g, '')));
 
-// GLOBAL OWNER CHECK
+        // GLOBAL OWNER CHECK
         const isOwner = Boolean(message.key.fromMe || senderIsSudo || senderIsOwnerOrSudo || isDirectOwner);
 
         // Handle button responses
@@ -969,14 +969,8 @@ async function handleMessages(sock, messageUpdate, printLog) {
             case userMessage.startsWith('.fb') || userMessage.startsWith('.facebook'):
                 await facebookCommand(sock, chatId, message);
                 break;
-            case userMessage.startsWith('.music'):
-                await playCommand(sock, chatId, message);
-                break;
-            case userMessage.startsWith('.spotify'):
+            case userMessage.startsWith('.spotify') || userMessage.startsWith('.song') || userMessage.startsWith('.play') || userMessage.startsWith('.music') || userMessage.startsWith('.mp3') || userMessage.startsWith('.ytmp3'):
                 await spotifyCommand(sock, chatId, message);
-                break;
-            case userMessage.startsWith('.play') || userMessage.startsWith('.mp3') || userMessage.startsWith('.ytmp3') || userMessage.startsWith('.song'):
-                await songCommand(sock, chatId, message);
                 break;
             case userMessage.startsWith('.video') || userMessage.startsWith('.ytmp4'):
                 await videoCommand(sock, chatId, message);

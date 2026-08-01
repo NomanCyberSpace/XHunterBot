@@ -16,39 +16,67 @@ async function spotifyCommand(sock, chatId, message) {
             return;
         }
 
-        const apiUrl = `https://okatsu-rolezapiiz.vercel.app/search/spotify?q=${encodeURIComponent(query)}`;
-        const { data } = await axios.get(apiUrl, { timeout: 20000, headers: { 'user-agent': 'Mozilla/5.0' } });
+        // Wait message
+        await sock.sendMessage(chatId, { text: '🎵 *Searching & downloading Spotify track...*' }, { quoted: message });
 
-        if (!data?.status || !data?.result) {
-            throw new Error('No result from Spotify API');
+        // Step 1: RapidAPI Spotify Search
+        const searchOptions = {
+            method: 'GET',
+            url: 'https://spotify23.p.rapidapi.com/search/',
+            params: {
+                q: query,
+                type: 'tracks',
+                offset: '0',
+                limit: '1'
+            },
+            headers: {
+                'x-rapidapi-key': '1448ef7463msh769afae00da1a97p10823djsnbcc28cdffff6',
+                'x-rapidapi-host': 'spotify23.p.rapidapi.com'
+            }
+        };
+
+        const response = await axios.request(searchOptions);
+        const track = response.data?.tracks?.items?.[0]?.data;
+
+        let songTitle = query;
+        let artistName = '';
+        let coverImg = '';
+
+        if (track) {
+            songTitle = track.name || query;
+            artistName = track.artists?.items?.[0]?.profile?.name || '';
+            coverImg = track.albumOfTrack?.coverArt?.sources?.[0]?.url || '';
         }
 
-        const r = data.result;
-        const audioUrl = r.audio;
+        // Step 2: Fetch Audio Stream/MP3 for Spotify Track
+        const dlUrl = `https://okatsu-rolezapiiz.vercel.app/search/spotify?q=${encodeURIComponent(songTitle + ' ' + artistName)}`;
+        const { data: dlData } = await axios.get(dlUrl, { timeout: 20000, headers: { 'user-agent': 'Mozilla/5.0' } });
+
+        const audioUrl = dlData?.result?.audio;
+
         if (!audioUrl) {
-            await sock.sendMessage(chatId, { text: 'No downloadable audio found for this query.' }, { quoted: message });
-            return;
+            throw new Error('Could not retrieve downloadable audio link');
         }
 
-        const caption = `🎵 ${r.title || r.name || 'Unknown Title'}\n👤 ${r.artist || ''}\n⏱ ${r.duration || ''}\n🔗 ${r.url || ''}`.trim();
+        const caption = `🎧 *Title:* ${songTitle}\n👤 *Artist:* ${artistName || 'Unknown'}\n🟢 *Source:* Spotify`.trim();
 
-         // Send cover and info as a follow-up (optional)
-         if (r.thumbnails) {
-            await sock.sendMessage(chatId, { image: { url: r.thumbnails }, caption }, { quoted: message });
-        } else if (caption) {
+        // Send Album Cover / Thumbnail
+        if (coverImg) {
+            await sock.sendMessage(chatId, { image: { url: coverImg }, caption }, { quoted: message });
+        } else {
             await sock.sendMessage(chatId, { text: caption }, { quoted: message });
         }
+
+        // Send MP3 Audio
         await sock.sendMessage(chatId, {
             audio: { url: audioUrl },
             mimetype: 'audio/mpeg',
-            fileName: `${(r.title || r.name || 'track').replace(/[\\/:*?"<>|]/g, '')}.mp3`
+            fileName: `${songTitle.replace(/[\\/:*?"<>|]/g, '')}.mp3`
         }, { quoted: message });
-
-       
 
     } catch (error) {
         console.error('[SPOTIFY] error:', error?.message || error);
-        await sock.sendMessage(chatId, { text: 'Failed to fetch Spotify audio. Try another query later.' }, { quoted: message });
+        await sock.sendMessage(chatId, { text: '❌ Failed to fetch Spotify song. Please try another song.' }, { quoted: message });
     }
 }
 
