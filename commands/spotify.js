@@ -1,4 +1,5 @@
 const axios = require('axios');
+const yts = require('yt-search');
 
 async function spotifyCommand(sock, chatId, message) {
     try {
@@ -17,48 +18,72 @@ async function spotifyCommand(sock, chatId, message) {
         }
 
         // Wait message
-        await sock.sendMessage(chatId, { text: '🎵 *Searching & downloading Spotify track...*' }, { quoted: message });
-
-        // Step 1: RapidAPI Spotify Search
-        const searchOptions = {
-            method: 'GET',
-            url: 'https://spotify23.p.rapidapi.com/search/',
-            params: {
-                q: query,
-                type: 'tracks',
-                offset: '0',
-                limit: '1'
-            },
-            headers: {
-                'x-rapidapi-key': '1448ef7463msh769afae00da1a97p10823djsnbcc28cdffff6',
-                'x-rapidapi-host': 'spotify23.p.rapidapi.com'
-            }
-        };
-
-        const response = await axios.request(searchOptions);
-        const track = response.data?.tracks?.items?.[0]?.data;
+        await sock.sendMessage(chatId, { text: '🎵 *Searching & downloading track...*' }, { quoted: message });
 
         let songTitle = query;
         let artistName = '';
         let coverImg = '';
 
-        if (track) {
-            songTitle = track.name || query;
-            artistName = track.artists?.items?.[0]?.profile?.name || '';
-            coverImg = track.albumOfTrack?.coverArt?.sources?.[0]?.url || '';
+        // Step 1: Search track details on Spotify via RapidAPI
+        try {
+            const searchOptions = {
+                method: 'GET',
+                url: 'https://spotify23.p.rapidapi.com/search/',
+                params: { q: query, type: 'tracks', offset: '0', limit: '1' },
+                headers: {
+                    'x-rapidapi-key': '1448ef7463msh769afae00da1a97p10823djsnbcc28cdffff6',
+                    'x-rapidapi-host': 'spotify23.p.rapidapi.com'
+                }
+            };
+            const response = await axios.request(searchOptions);
+            const track = response.data?.tracks?.items?.[0]?.data;
+
+            if (track) {
+                songTitle = track.name || query;
+                artistName = track.artists?.items?.[0]?.profile?.name || '';
+                coverImg = track.albumOfTrack?.coverArt?.sources?.[0]?.url || '';
+            }
+        } catch (e) {
+            console.log('Spotify RapidAPI search failed, falling back to query');
         }
 
-        // Step 2: Fetch Audio Stream/MP3 for Spotify Track
-        const dlUrl = `https://okatsu-rolezapiiz.vercel.app/search/spotify?q=${encodeURIComponent(songTitle + ' ' + artistName)}`;
-        const { data: dlData } = await axios.get(dlUrl, { timeout: 20000, headers: { 'user-agent': 'Mozilla/5.0' } });
+        // Step 2: Audio Download Fallback System
+        let audioUrl = null;
 
-        const audioUrl = dlData?.result?.audio;
+        // Try API 1 (Keith API)
+        try {
+            const searchYt = await yts(`${songTitle} ${artistName}`);
+            if (searchYt?.videos?.length > 0) {
+                const ytUrl = searchYt.videos[0].url;
+                if (!coverImg) coverImg = searchYt.videos[0].thumbnail;
+
+                const res1 = await axios.get(`https://apis-keith.vercel.app/download/dlmp3?url=${ytUrl}`, { timeout: 15000 });
+                if (res1.data?.status && res1.data?.result?.downloadUrl) {
+                    audioUrl = res1.data.result.downloadUrl;
+                }
+            }
+        } catch (err1) {
+            console.log('API 1 download failed, trying API 2...');
+        }
+
+        // Try API 2 (Okatsu Spotify API) if API 1 failed
+        if (!audioUrl) {
+            try {
+                const dlUrl = `https://okatsu-rolezapiiz.vercel.app/search/spotify?q=${encodeURIComponent(songTitle + ' ' + artistName)}`;
+                const { data: dlData } = await axios.get(dlUrl, { timeout: 15000, headers: { 'user-agent': 'Mozilla/5.0' } });
+                if (dlData?.result?.audio) {
+                    audioUrl = dlData.result.audio;
+                }
+            } catch (err2) {
+                console.log('API 2 download failed');
+            }
+        }
 
         if (!audioUrl) {
-            throw new Error('Could not retrieve downloadable audio link');
+            throw new Error('All audio download sources failed');
         }
 
-        const caption = `🎧 *Title:* ${songTitle}\n👤 *Artist:* ${artistName || 'Unknown'}\n🟢 *Source:* Spotify`.trim();
+        const caption = `🎧 *Title:* ${songTitle}\n👤 *Artist:* ${artistName || 'Unknown'}\n🟢 *Status:* Downloaded`.trim();
 
         // Send Album Cover / Thumbnail
         if (coverImg) {
@@ -76,7 +101,7 @@ async function spotifyCommand(sock, chatId, message) {
 
     } catch (error) {
         console.error('[SPOTIFY] error:', error?.message || error);
-        await sock.sendMessage(chatId, { text: '❌ Failed to fetch Spotify song. Please try another song.' }, { quoted: message });
+        await sock.sendMessage(chatId, { text: '❌ Failed to fetch song. Please try again with another keyword.' }, { quoted: message });
     }
 }
 
