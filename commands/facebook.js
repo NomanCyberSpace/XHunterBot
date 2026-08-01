@@ -4,64 +4,47 @@ async function facebookCommand(sock, chatId, message) {
     try {
         const text = message.message?.conversation || message.message?.extendedTextMessage?.text || '';
         const url = text.split(/\s+/).slice(1).join(' ').trim();
-        
+
         if (!url || !url.includes('facebook.com')) {
-            return await sock.sendMessage(chatId, { 
-                text: "Please provide a valid Facebook video URL.\nExample: .fb https://www.facebook.com/..."
-            }, { quoted: message });
+            return await sock.sendMessage(chatId, { text: "❌ Please provide a Facebook video URL." }, { quoted: message });
         }
 
         await sock.sendMessage(chatId, { react: { text: '⏳', key: message.key } });
 
+        // Primary API
         let videoUrl = null;
-        let title = "Facebook Video";
-
-        // Step 1: RapidAPI Social Media Video Downloader
         try {
-            const options = {
-                method: 'GET',
-                url: 'https://social-media-video-downloader.p.rapidapi.com/facebook/video/details',
-                params: { url: url },
-                headers: {
-                    'x-rapidapi-key': '1448ef7463msh769afae00da1a97p10823djsnbcc28cdffff6',
-                    'x-rapidapi-host': 'social-media-video-downloader.p.rapidapi.com'
-                }
-            };
-            const res = await axios.request(options);
-            if (res.data?.hd_url || res.data?.sd_url) {
-                videoUrl = res.data.hd_url || res.data.sd_url;
-                title = res.data.title || title;
+            const res = await axios.get(`https://api.davidcyriltech.my.id/download/facebook?url=${encodeURIComponent(url)}`);
+            if (res.data?.success && res.data?.result) {
+                videoUrl = res.data.result.hd || res.data.result.sd;
             }
-        } catch (err) {
-            console.log("RapidAPI FB failed, trying fallback...");
-        }
+        } catch (e) {}
 
-        // Step 2: Fallback Hanggts API
+        // Backup RapidAPI
         if (!videoUrl) {
             try {
-                const fbApiUrl = `https://api.hanggts.xyz/download/facebook?url=${encodeURIComponent(url)}`;
-                const res = await axios.get(fbApiUrl, { timeout: 15000 });
-                if (res.data?.result?.media) {
-                    videoUrl = res.data.result.media.video_hd || res.data.result.media.video_sd;
-                }
-            } catch (err2) {
-                console.log("Fallback FB API failed");
-            }
+                const res = await axios.get('https://social-media-video-downloader.p.rapidapi.com/facebook/video/details', {
+                    params: { url },
+                    headers: {
+                        'x-rapidapi-key': '1448ef7463msh769afae00da1a97p10823djsnbcc28cdffff6',
+                        'x-rapidapi-host': 'social-media-video-downloader.p.rapidapi.com'
+                    }
+                });
+                videoUrl = res.data?.hd_url || res.data?.sd_url;
+            } catch (e) {}
         }
 
-        if (!videoUrl) {
-            throw new Error("Unable to fetch Facebook video");
-        }
+        if (!videoUrl) throw new Error("Could not extract Facebook video link");
 
         await sock.sendMessage(chatId, {
             video: { url: videoUrl },
-            mimetype: "video/mp4",
-            caption: `📥 *Downloaded via XHUNTERBOT*\n📝 Title: ${title}`
+            mimetype: 'video/mp4',
+            caption: '📥 *Facebook Video Downloaded*'
         }, { quoted: message });
 
-    } catch (error) {
-        console.error('Error in Facebook command:', error.message);
-        await sock.sendMessage(chatId, { text: "❌ Failed to download Facebook video. Please check if link is public." }, { quoted: message });
+    } catch (err) {
+        console.error('FB Error:', err.message);
+        await sock.sendMessage(chatId, { text: "❌ Failed to download Facebook video." }, { quoted: message });
     }
 }
 
