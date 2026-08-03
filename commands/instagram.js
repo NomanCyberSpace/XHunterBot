@@ -1,50 +1,51 @@
 const axios = require('axios');
-const { igdl } = require("ruhend-scraper");
 
 async function instagramCommand(sock, chatId, message) {
     try {
-        const text = message.message?.conversation || message.message?.extendedTextMessage?.text || '';
-        const url = text.split(/\s+/).slice(1).join(' ').trim();
+        const rawText = message.message?.conversation || 
+                        message.message?.extendedTextMessage?.text || 
+                        message.message?.imageMessage?.caption || 
+                        message.message?.videoMessage?.caption || '';
+
+        const args = rawText.trim().split(/\s+/);
+        let url = args.slice(1).join(' ').trim();
 
         if (!url || (!url.includes('instagram.com') && !url.includes('instagr.am'))) {
             return await sock.sendMessage(chatId, { 
-                text: "Please provide a valid Instagram post/reel link."
+                text: "❌ Please provide a valid Instagram post/reel link."
             }, { quoted: message });
         }
 
         await sock.sendMessage(chatId, { react: { text: '🔄', key: message.key } });
 
+        // Strip tracking parameters (?igsh=...)
+        let cleanUrl = url.split('?')[0];
+
         let mediaUrls = [];
 
-        // Step 1: RapidAPI Social Media Video Downloader
+        // Engine 1: BK9 Downloader Engine
         try {
-            const options = {
-                method: 'GET',
-                url: 'https://social-media-video-downloader.p.rapidapi.com/instagram/post/details',
-                params: { url: url },
-                headers: {
-                    'x-rapidapi-key': '1448ef7463msh769afae00da1a97p10823djsnbcc28cdffff6',
-                    'x-rapidapi-host': 'social-media-video-downloader.p.rapidapi.com'
+            const res1 = await axios.get(`https://bk9.fun/download/instagram?url=${encodeURIComponent(cleanUrl)}`, { timeout: 12000 });
+            if (res1.data?.status && res1.data?.BK9) {
+                const bkData = res1.data.BK9;
+                if (Array.isArray(bkData)) {
+                    mediaUrls = bkData.map(m => m.url || m).filter(Boolean);
+                } else if (typeof bkData === 'string') {
+                    mediaUrls.push(bkData);
+                } else if (bkData.url) {
+                    mediaUrls.push(bkData.url);
                 }
-            };
-            const res = await axios.request(options);
-            if (res.data?.links && Array.isArray(res.data.links)) {
-                mediaUrls = res.data.links.map(item => item.link || item.url).filter(Boolean);
-            } else if (res.data?.url) {
-                mediaUrls.push(res.data.url);
             }
-        } catch (e) {
-            console.log("RapidAPI Instagram failed, trying fallback scraper...");
-        }
+        } catch (e) {}
 
-        // Step 2: Fallback Scraper (ruhend-scraper)
+        // Engine 2: Vreden Engine
         if (mediaUrls.length === 0) {
             try {
-                const downloadData = await igdl(url);
-                if (downloadData?.data) {
-                    mediaUrls = downloadData.data.map(m => m.url).filter(Boolean);
+                const res2 = await axios.get(`https://api.vreden.web.id/api/igdl?url=${encodeURIComponent(cleanUrl)}`, { timeout: 12000 });
+                if (res2.data?.result && Array.isArray(res2.data.result)) {
+                    mediaUrls = res2.data.result.map(item => item.url || item.downloadUrl || item).filter(Boolean);
                 }
-            } catch (e2) {}
+            } catch (e) {}
         }
 
         if (mediaUrls.length === 0) {
@@ -53,9 +54,8 @@ async function instagramCommand(sock, chatId, message) {
             }, { quoted: message });
         }
 
-        // Send Media Items
         for (let mediaUrl of mediaUrls.slice(0, 5)) {
-            const isVideo = /\.(mp4|mov|avi|mkv)/i.test(mediaUrl) || url.includes('/reel/') || url.includes('/tv/');
+            const isVideo = /\.(mp4|mov|avi|mkv)/i.test(mediaUrl) || cleanUrl.includes('/reel/') || cleanUrl.includes('/tv/');
             if (isVideo) {
                 await sock.sendMessage(chatId, {
                     video: { url: mediaUrl },
@@ -65,13 +65,13 @@ async function instagramCommand(sock, chatId, message) {
             } else {
                 await sock.sendMessage(chatId, {
                     image: { url: mediaUrl },
-                    caption: "𝗗𝗢𝗪𝗡𝗟𝗢𝗔𝗗𝗘𝗗 𝗕𝗬 𝗫HUN𝗧𝗘𝗥𝗕𝗢𝗧"
+                    caption: "𝗗𝗢𝗪𝗡𝗟𝗢𝗔𝗗𝗘𝗗 𝗕𝗬 𝗫𝗛𝗨𝗡𝗧𝗘𝗥𝗕𝗢𝗧"
                 }, { quoted: message });
             }
         }
 
     } catch (error) {
-        console.error('Error in Instagram command:', error.message);
+        console.error('Instagram Command Error:', error.message);
         await sock.sendMessage(chatId, { text: "❌ An error occurred processing Instagram request." }, { quoted: message });
     }
 }

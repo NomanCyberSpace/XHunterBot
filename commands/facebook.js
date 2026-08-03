@@ -2,16 +2,21 @@ const axios = require('axios');
 
 async function facebookCommand(sock, chatId, message) {
     try {
-        const text = message.message?.conversation || message.message?.extendedTextMessage?.text || '';
-        let url = text.split(/\s+/).slice(1).join(' ').trim();
+        const rawText = message.message?.conversation || 
+                        message.message?.extendedTextMessage?.text || 
+                        message.message?.imageMessage?.caption || 
+                        message.message?.videoMessage?.caption || '';
 
-        if (!url || !url.includes('facebook.com')) {
-            return await sock.sendMessage(chatId, { text: "❌ Please provide a valid Facebook video link." }, { quoted: message });
+        const args = rawText.trim().split(/\s+/);
+        let url = args.slice(1).join(' ').trim();
+
+        if (!url || (!url.includes('facebook.com') && !url.includes('fb.watch'))) {
+            return await sock.sendMessage(chatId, { text: "❌ Please provide a valid Facebook video/reel URL." }, { quoted: message });
         }
 
         await sock.sendMessage(chatId, { react: { text: '⏳', key: message.key } });
 
-        // Unpack share links (facebook.com/share/r/...)
+        // Step 1: Clean parameters and expand share links
         let cleanUrl = url;
         try {
             const headRes = await axios.get(url, {
@@ -24,52 +29,51 @@ async function facebookCommand(sock, chatId, message) {
             }
         } catch (e) {}
 
+        cleanUrl = cleanUrl.split('?')[0];
+
         let videoUrl = null;
 
-        // Server 1: SnapSave/FB Downloader Engine
+        // Engine 1: Delirius Facebook Downloader
         try {
-            const res = await axios.get(`https://api.vreden.web.id/api/fbdl?url=${encodeURIComponent(cleanUrl)}`, { timeout: 12000 });
-            if (res.data?.result) {
-                videoUrl = res.data.result.hd || res.data.result.sd || res.data.result.url;
+            const res1 = await axios.get(`https://deliriussapi-official.vercel.app/download/facebook?url=${encodeURIComponent(cleanUrl)}`, { timeout: 12000 });
+            if (res1.data?.status && res1.data?.urls) {
+                videoUrl = res1.data.urls.find(u => u.sd || u.hd)?.sd || res1.data.urls[0]?.sd || res1.data.urls[0]?.hd;
             }
         } catch (e) {}
 
-        // Server 2: DavidCyril API
+        // Engine 2: BK9 Downloader Engine
         if (!videoUrl) {
             try {
-                const res = await axios.get(`https://api.davidcyriltech.my.id/download/facebook?url=${encodeURIComponent(cleanUrl)}`, { timeout: 12000 });
-                if (res.data?.success && res.data?.result) {
-                    videoUrl = res.data.result.hd || res.data.result.sd || res.data.result.video;
+                const res2 = await axios.get(`https://bk9.fun/download/fb?url=${encodeURIComponent(cleanUrl)}`, { timeout: 12000 });
+                if (res2.data?.status && res2.data?.BK9) {
+                    videoUrl = res2.data.BK9.hd || res2.data.BK9.sd || res2.data.BK9;
                 }
             } catch (e) {}
         }
 
-        // Server 3: RapidAPI
+        // Engine 3: Vreden FB Engine
         if (!videoUrl) {
             try {
-                const res = await axios.get('https://social-media-video-downloader.p.rapidapi.com/facebook/video/details', {
-                    params: { url: cleanUrl },
-                    headers: {
-                        'x-rapidapi-key': '1448ef7463msh769afae00da1a97p10823djsnbcc28cdffff6',
-                        'x-rapidapi-host': 'social-media-video-downloader.p.rapidapi.com'
-                    },
-                    timeout: 12000
-                });
-                videoUrl = res.data?.hd_url || res.data?.sd_url;
+                const res3 = await axios.get(`https://api.vreden.web.id/api/fbdl?url=${encodeURIComponent(cleanUrl)}`, { timeout: 12000 });
+                if (res3.data?.result) {
+                    videoUrl = res3.data.result.hd || res3.data.result.sd || res3.data.result.url;
+                }
             } catch (e) {}
         }
 
-        if (!videoUrl) throw new Error("Could not extract Facebook video link");
+        if (!videoUrl) {
+            return await sock.sendMessage(chatId, { text: "❌ Facebook video extract nahi ho saki. Make sure post public ho." }, { quoted: message });
+        }
 
         await sock.sendMessage(chatId, {
             video: { url: videoUrl },
             mimetype: 'video/mp4',
-            caption: '📥 *Facebook Video Downloaded*'
+            caption: '📥 *Facebook Video Downloaded via XHUNTERBOT*'
         }, { quoted: message });
 
     } catch (err) {
-        console.error('FB Error:', err.message);
-        await sock.sendMessage(chatId, { text: "❌ Failed to download Facebook video. Ensure link is public." }, { quoted: message });
+        console.error('FB Command Error:', err.message);
+        await sock.sendMessage(chatId, { text: "❌ Facebook video process karne mein masla hua." }, { quoted: message });
     }
 }
 
