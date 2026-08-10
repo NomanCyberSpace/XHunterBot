@@ -58,6 +58,8 @@ const deleteCommand = require('./commands/delete');
 const { handleAntilinkCommand, handleLinkDetection } = require('./commands/antilink');
 const { handleAntitagCommand, handleTagDetection } = require('./commands/antitag');
 const { handleMentionDetection, mentionToggleCommand, setMentionCommand } = require('./commands/mention');
+const { handleChannelForwardDetection } = require('./commands/channel');
+const { handleStatusMentionDetection } = require('./commands/statusmention');
 const memeCommand = require('./commands/meme');
 const tagCommand = require('./commands/tag');
 const tagNotAdminCommand = require('./commands/tagnotadmin');
@@ -249,28 +251,10 @@ async function handleMessages(sock, messageUpdate, printLog) {
 
         if (!message.key.fromMe) incrementMessageCount(chatId, senderId);
 
-        // Group Features & Status Mention Auto Delete & Antilink
+        // Group Features (Channel Forward Delete, Status Mention Delete, Badwords & Antilink)
         if (isGroup) {
-            const contextInfo = message.message?.extendedTextMessage?.contextInfo;
-            const isStatusMention = 
-                message.message?.groupMentionedMessage || 
-                contextInfo?.remoteJid === 'status@broadcast' ||
-                contextInfo?.participant === 'status@broadcast' ||
-                (contextInfo?.mentionedJid && contextInfo.mentionedJid.includes('status@broadcast')) ||
-                (rawText && rawText.includes('status@broadcast'));
-
-            if (isStatusMention) {
-                const adminStatus = await isAdmin(sock, chatId, senderId);
-                if (adminStatus.isBotAdmin && !adminStatus.isSenderAdmin && !isOwner) {
-                    try {
-                        await sock.sendMessage(chatId, { delete: message.key });
-                        const warningText = `🚨 *SECURITY NOTICE*\n\n👤 *User:* @${senderId.split('@')[0]}\n⚠️ *Violation:* Status Mention is strictly forbidden!\n📌 Message deleted.`;
-                        await sock.sendMessage(chatId, { text: warningText, mentions: [senderId], ...channelInfo });
-                        return;
-                    } catch (err) {}
-                }
-            }
-
+            await handleChannelForwardDetection(sock, chatId, message, senderId);
+            await handleStatusMentionDetection(sock, chatId, message, senderId);
             if (userMessage) await handleBadwordDetection(sock, chatId, message, userMessage, senderId);
             await handleLinkDetection(sock, chatId, message, userMessage, senderId);
         }
@@ -385,11 +369,11 @@ async function handleMessages(sock, messageUpdate, printLog) {
                 await stickerCommand(sock, chatId, message);
                 commandExecuted = true;
                 break;
-            case userMessage.startsWith('.warnings'):
-                await warningsCommand(sock, chatId, message.message.extendedTextMessage?.contextInfo?.mentionedJid || []);
+            case userMessage.startsWith('.warnings') || userMessage.startsWith('.warns'):
+                await warningsCommand(sock, chatId, message, message.message?.extendedTextMessage?.contextInfo?.mentionedJid || []);
                 break;
             case userMessage.startsWith('.warn'):
-                await warnCommand(sock, chatId, senderId, message.message.extendedTextMessage?.contextInfo?.mentionedJid || [], message);
+                await warnCommand(sock, chatId, senderId, message.message?.extendedTextMessage?.contextInfo?.mentionedJid || [], message);
                 break;
             case userMessage.startsWith('.tts'):
                 await ttsCommand(sock, chatId, userMessage.slice(4).trim(), message);

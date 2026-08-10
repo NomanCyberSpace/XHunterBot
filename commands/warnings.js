@@ -1,28 +1,52 @@
 const fs = require('fs');
 const path = require('path');
 
-const warningsFilePath = path.join(__dirname, '../data/warnings.json');
+const databaseDir = path.join(process.cwd(), 'data');
+const warningsPath = path.join(databaseDir, 'warnings.json');
 
 function loadWarnings() {
-    if (!fs.existsSync(warningsFilePath)) {
-        fs.writeFileSync(warningsFilePath, JSON.stringify({}), 'utf8');
+    try {
+        if (!fs.existsSync(databaseDir)) fs.mkdirSync(databaseDir, { recursive: true });
+        if (!fs.existsSync(warningsPath)) fs.writeFileSync(warningsPath, JSON.stringify({}), 'utf8');
+        return JSON.parse(fs.readFileSync(warningsPath, 'utf8'));
+    } catch (e) {
+        return {};
     }
-    const data = fs.readFileSync(warningsFilePath, 'utf8');
-    return JSON.parse(data);
 }
 
-async function warningsCommand(sock, chatId, mentionedJidList) {
-    const warnings = loadWarnings();
+async function warningsCommand(sock, chatId, message, mentionedJids) {
+    try {
+        if (!chatId.endsWith('@g.us')) {
+            return await sock.sendMessage(chatId, { text: '❌ This command can only be used in groups.' }, { quoted: message });
+        }
 
-    if (mentionedJidList.length === 0) {
-        await sock.sendMessage(chatId, { text: 'Please mention a user to check warnings.' });
-        return;
+        let userToCheck = null;
+
+        // Check mentioned user, replied user, or default to sender
+        if (mentionedJids && mentionedJids.length > 0) {
+            userToCheck = mentionedJids[0];
+        } else if (message.message?.extendedTextMessage?.contextInfo?.participant) {
+            userToCheck = message.message.extendedTextMessage.contextInfo.participant;
+        } else {
+            userToCheck = message.key.participant || message.key.remoteJid;
+        }
+
+        const warnings = loadWarnings();
+        const warningCount = warnings[chatId]?.[userToCheck] || 0;
+
+        const responseText = `📋 *WARNING STATUS*\n\n` +
+                             `👤 *User:* @${userToCheck.split('@')[0]}\n` +
+                             `⚠️ *Warnings:* ${warningCount}/3`;
+
+        await sock.sendMessage(chatId, {
+            text: responseText,
+            mentions: [userToCheck]
+        }, { quoted: message });
+
+    } catch (error) {
+        console.error('Error in warningsCommand:', error.message);
+        await sock.sendMessage(chatId, { text: '❌ Failed to fetch warning count.' }, { quoted: message });
     }
-
-    const userToCheck = mentionedJidList[0];
-    const warningCount = warnings[userToCheck] || 0;
-
-    await sock.sendMessage(chatId, { text: `User has ${warningCount} warning(s).` });
 }
 
 module.exports = warningsCommand;
