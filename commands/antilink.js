@@ -1,6 +1,6 @@
 const fs = require('fs');
 const path = require('path');
-const { getAntilink } = require('../lib/index');
+const { getAntilink, setAntilink } = require('../lib/index');
 const isAdmin = require('../lib/isAdmin');
 
 const databaseDir = path.join(process.cwd(), 'data');
@@ -25,30 +25,53 @@ function saveWarnings(data) {
     }
 }
 
+async function handleAntilinkCommand(sock, chatId, userMessage, senderId, isSenderAdmin, message) {
+    try {
+        if (!chatId.endsWith('@g.us')) {
+            return await sock.sendMessage(chatId, { text: '❌ This command can only be used in groups.' }, { quoted: message });
+        }
+
+        if (!isSenderAdmin) {
+            return await sock.sendMessage(chatId, { text: '❌ Only group admins can use this command.' }, { quoted: message });
+        }
+
+        const args = userMessage.trim().split(/\s+/);
+        const action = (args[1] || '').toLowerCase();
+
+        if (action === 'on' || action === 'enable') {
+            await setAntilink(chatId, 'on', true);
+            return await sock.sendMessage(chatId, { text: '🛡️ *Antilink protection is now ENABLED!*' }, { quoted: message });
+        } else if (action === 'off' || action === 'disable') {
+            await setAntilink(chatId, 'on', false);
+            return await sock.sendMessage(chatId, { text: '🛡️ *Antilink protection is now DISABLED.*' }, { quoted: message });
+        } else {
+            return await sock.sendMessage(chatId, { text: '💡 *Usage:*\n• `.antilink on` - Enable link detection\n• `.antilink off` - Disable link detection' }, { quoted: message });
+        }
+    } catch (error) {
+        console.error('Error in handleAntilinkCommand:', error.message);
+        await sock.sendMessage(chatId, { text: '❌ Failed to process antilink command.' }, { quoted: message });
+    }
+}
+
 async function handleLinkDetection(sock, chatId, message, userMessage, senderId) {
     try {
         if (!chatId || !chatId.endsWith('@g.us')) return;
 
-        // Check Antilink configuration
         const antilinkConfig = await getAntilink(chatId, 'on');
         if (!antilinkConfig || !antilinkConfig.enabled) return;
 
-        // Check Admin Status (Admins are immune to Antilink)
         const { isSenderAdmin, isBotAdmin } = await isAdmin(sock, chatId, senderId);
         if (isSenderAdmin || !isBotAdmin) return;
 
-        // Strong Universal Link Detector
         const strongLinkRegex = /(https?:\/\/[^\s]+)|(www\.[^\s]+)|(chat\.whatsapp\.com\/[^\s]+)|(wa\.me\/[^\s]+)|(t\.me\/[^\s]+)|([a-zA-Z0-9-]+\.(com|net|org|io|me|co|xyz|info|biz|tk|ml|ga|cf|gq)\b[^\s]*)/gi;
 
         if (strongLinkRegex.test(userMessage)) {
-            // 1. Delete Link Message (Safe Baileys Standard Key)
             try {
                 await sock.sendMessage(chatId, { delete: message.key });
             } catch (err) {
                 console.error("Failed to delete link message:", err.message);
             }
 
-            // 2. Increment Warning Count
             let warnings = getWarnings();
             if (!warnings[chatId]) warnings[chatId] = {};
             if (!warnings[chatId][senderId]) warnings[chatId][senderId] = 0;
@@ -63,7 +86,6 @@ async function handleLinkDetection(sock, chatId, message, userMessage, senderId)
                     mentions: [senderId]
                 });
             } else {
-                // 3. Auto Kick at 3 Warnings
                 delete warnings[chatId][senderId];
                 saveWarnings(warnings);
 
@@ -85,5 +107,6 @@ async function handleLinkDetection(sock, chatId, message, userMessage, senderId)
 }
 
 module.exports = {
+    handleAntilinkCommand,
     handleLinkDetection
 };
