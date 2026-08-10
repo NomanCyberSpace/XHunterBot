@@ -1,129 +1,92 @@
-const { handleGoodbye } = require('../lib/welcome');
-const { isGoodByeOn, getGoodbye } = require('../lib/index');
-const fetch = require('node-fetch');
+const fs = require('fs');
+const path = require('path');
+const isAdmin = require('../lib/isAdmin');
 
-async function goodbyeCommand(sock, chatId, message, match) {
-    // Check if it's a group
-    if (!chatId.endsWith('@g.us')) {
-        await sock.sendMessage(chatId, { text: 'This command can only be used in groups.' });
-        return;
+const databaseDir = path.join(process.cwd(), 'data');
+const goodbyePath = path.join(databaseDir, 'goodbye.json');
+
+function getGoodbyeData() {
+    try {
+        if (!fs.existsSync(databaseDir)) fs.mkdirSync(databaseDir, { recursive: true });
+        if (!fs.existsSync(goodbyePath)) fs.writeFileSync(goodbyePath, JSON.stringify({}), 'utf8');
+        return JSON.parse(fs.readFileSync(goodbyePath, 'utf8'));
+    } catch (e) {
+        return {};
     }
+}
 
-    // Extract match from message
-    const text = message.message?.conversation || 
-                message.message?.extendedTextMessage?.text || '';
-    const matchText = text.split(' ').slice(1).join(' ');
+function saveGoodbyeData(data) {
+    try {
+        if (!fs.existsSync(databaseDir)) fs.mkdirSync(databaseDir, { recursive: true });
+        fs.writeFileSync(goodbyePath, JSON.stringify(data, null, 2), 'utf8');
+    } catch (e) {
+        console.error("Failed to save goodbye data:", e);
+    }
+}
 
-    await handleGoodbye(sock, chatId, message, matchText);
+async function goodbyeCommand(sock, chatId, message) {
+    try {
+        if (!chatId.endsWith('@g.us')) {
+            return await sock.sendMessage(chatId, { text: '❌ This command can only be used in groups.' }, { quoted: message });
+        }
+
+        const senderId = message.key.participant || message.key.remoteJid;
+        const { isSenderAdmin } = await isAdmin(sock, chatId, senderId);
+
+        if (!isSenderAdmin) {
+            return await sock.sendMessage(chatId, { text: '❌ Only group admins can toggle goodbye messages.' }, { quoted: message });
+        }
+
+        const rawText = message.message?.conversation || message.message?.extendedTextMessage?.text || '';
+        const args = rawText.trim().split(/\s+/);
+        const option = (args[1] || '').toLowerCase();
+
+        let data = getGoodbyeData();
+        if (!data[chatId]) data[chatId] = { enabled: false };
+
+        if (option === 'on' || option === 'enable') {
+            data[chatId].enabled = true;
+            saveGoodbyeData(data);
+            return await sock.sendMessage(chatId, { text: '✅ *Goodbye messages are now ENABLED for this group!*' }, { quoted: message });
+        }
+
+        if (option === 'off' || option === 'disable') {
+            data[chatId].enabled = false;
+            saveGoodbyeData(data);
+            return await sock.sendMessage(chatId, { text: '❌ *Goodbye messages are now DISABLED for this group.*' }, { quoted: message });
+        }
+
+        const currentStatus = data[chatId].enabled ? 'ENABLED 🟢' : 'DISABLED 🔴';
+        await sock.sendMessage(chatId, { 
+            text: `⚙️ *GOODBYE SETTINGS*\n\n📌 *Status:* ${currentStatus}\n\n💡 *Usage:*\n• \`.goodbye on\` - Turn ON\n• \`.goodbye off\` - Turn OFF` 
+        }, { quoted: message });
+
+    } catch (error) {
+        console.error('Error in goodbyeCommand:', error.message);
+        await sock.sendMessage(chatId, { text: '❌ Failed to update goodbye settings.' }, { quoted: message });
+    }
 }
 
 async function handleLeaveEvent(sock, id, participants) {
-    // Check if goodbye is enabled for this group
-    const isGoodbyeEnabled = await isGoodByeOn(id);
-    if (!isGoodbyeEnabled) return;
+    try {
+        if (!id.endsWith('@g.us')) return;
 
-    // Get custom goodbye message
-    const customMessage = await getGoodbye(id);
+        const data = getGoodbyeData();
+        if (!data[id] || !data[id].enabled) return;
 
-    // Get group metadata
-    const groupMetadata = await sock.groupMetadata(id);
-    const groupName = groupMetadata.subject;
+        for (const participant of participants) {
+            const participantJid = typeof participant === 'string' ? participant : (participant.id || participant.toString());
+            const userNumber = participantJid.split('@')[0];
 
-    // Send goodbye message for each leaving participant
-    for (const participant of participants) {
-        try {
-            // Handle case where participant might be an object or not a string
-            const participantString = typeof participant === 'string' ? participant : (participant.id || participant.toString());
-            const user = participantString.split('@')[0];
-            
-            // Get user's display name
-            let displayName = user; // Default to phone number
-            try {
-                const contact = await sock.getBusinessProfile(participantString);
-                if (contact && contact.name) {
-                    displayName = contact.name;
-                } else {
-                    // Try to get from group participants
-                    const groupParticipants = groupMetadata.participants;
-                    const userParticipant = groupParticipants.find(p => p.id === participantString);
-                    if (userParticipant && userParticipant.name) {
-                        displayName = userParticipant.name;
-                    }
-                }
-            } catch (nameError) {
-                console.log('Could not fetch display name, using phone number');
-            }
-            
-            // Process custom message with variables
-            let finalMessage;
-            if (customMessage) {
-                finalMessage = customMessage
-                    .replace(/{user}/g, `@${displayName}`)
-                    .replace(/{group}/g, groupName);
-            } else {
-                // Default message if no custom message is set
-                finalMessage = ` *@${displayName}* we will never miss you! `;
-            }
-            
-            // Try to send with image first (always try images)
-            try {
-                // Get user profile picture
-                let profilePicUrl = `https://img.pyrocdn.com/dbKUgahg.png`; // Default avatar
-                try {
-                    const profilePic = await sock.profilePictureUrl(participantString, 'image');
-                    if (profilePic) {
-                        profilePicUrl = profilePic;
-                    }
-                } catch (profileError) {
-                    console.log('Could not fetch profile picture, using default');
-                }
-                
-                // Construct API URL for goodbye image
-                const apiUrl = `https://api.some-random-api.com/welcome/img/2/gaming1?type=leave&textcolor=red&username=${encodeURIComponent(displayName)}&guildName=${encodeURIComponent(groupName)}&memberCount=${groupMetadata.participants.length}&avatar=${encodeURIComponent(profilePicUrl)}`;
-                
-                // Fetch the goodbye image
-                const response = await fetch(apiUrl);
-                if (response.ok) {
-                    const imageBuffer = await response.buffer();
-                    
-                    // Send goodbye image with caption (custom or default message)
-                    await sock.sendMessage(id, {
-                        image: imageBuffer,
-                        caption: finalMessage,
-                        mentions: [participantString]
-                    });
-                    continue; // Skip to next participant
-                }
-            } catch (imageError) {
-                console.log('Image generation failed, falling back to text');
-            }
-            
-            // Send text message (either custom message or fallback)
+            const goodbyeText = `Goodbye... +${userNumber}\nwe will miss you`;
+
             await sock.sendMessage(id, {
-                text: finalMessage,
-                mentions: [participantString]
-            });
-        } catch (error) {
-            console.error('Error sending goodbye message:', error);
-            // Fallback to text message
-            const participantString = typeof participant === 'string' ? participant : (participant.id || participant.toString());
-            const user = participantString.split('@')[0];
-            
-            // Use custom message if available, otherwise use simple fallback
-            let fallbackMessage;
-            if (customMessage) {
-                fallbackMessage = customMessage
-                    .replace(/{user}/g, `@${user}`)
-                    .replace(/{group}/g, groupName);
-            } else {
-                fallbackMessage = `Goodbye @${user}! 👋`;
-            }
-            
-            await sock.sendMessage(id, {
-                text: fallbackMessage,
-                mentions: [participantString]
+                text: goodbyeText,
+                mentions: [participantJid]
             });
         }
+    } catch (error) {
+        console.error('Error in handleLeaveEvent:', error.message);
     }
 }
 

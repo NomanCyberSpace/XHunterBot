@@ -1,147 +1,98 @@
-const { handleWelcome } = require('../lib/welcome');
-const { isWelcomeOn, getWelcome } = require('../lib/index');
-const { channelInfo } = require('../lib/messageConfig');
-const fetch = require('node-fetch');
+const fs = require('fs');
+const path = require('path');
+const isAdmin = require('../lib/isAdmin');
 
-async function welcomeCommand(sock, chatId, message, match) {
-    // Check if it's a group
-    if (!chatId.endsWith('@g.us')) {
-        await sock.sendMessage(chatId, { text: 'This command can only be used in groups.' });
-        return;
+const databaseDir = path.join(process.cwd(), 'data');
+const welcomePath = path.join(databaseDir, 'welcome.json');
+
+function getWelcomeData() {
+    try {
+        if (!fs.existsSync(databaseDir)) fs.mkdirSync(databaseDir, { recursive: true });
+        if (!fs.existsSync(welcomePath)) fs.writeFileSync(welcomePath, JSON.stringify({}), 'utf8');
+        return JSON.parse(fs.readFileSync(welcomePath, 'utf8'));
+    } catch (e) {
+        return {};
     }
+}
 
-    // Extract match from message
-    const text = message.message?.conversation || 
-                message.message?.extendedTextMessage?.text || '';
-    const matchText = text.split(' ').slice(1).join(' ');
+function saveWelcomeData(data) {
+    try {
+        if (!fs.existsSync(databaseDir)) fs.mkdirSync(databaseDir, { recursive: true });
+        fs.writeFileSync(welcomePath, JSON.stringify(data, null, 2), 'utf8');
+    } catch (e) {
+        console.error("Failed to save welcome data:", e);
+    }
+}
 
-    await handleWelcome(sock, chatId, message, matchText);
+async function welcomeCommand(sock, chatId, message) {
+    try {
+        if (!chatId.endsWith('@g.us')) {
+            return await sock.sendMessage(chatId, { text: '❌ This command can only be used in groups.' }, { quoted: message });
+        }
+
+        const senderId = message.key.participant || message.key.remoteJid;
+        const { isSenderAdmin, isBotAdmin } = await isAdmin(sock, chatId, senderId);
+
+        if (!isSenderAdmin) {
+            return await sock.sendMessage(chatId, { text: '❌ Only group admins can toggle welcome messages.' }, { quoted: message });
+        }
+
+        const rawText = message.message?.conversation || message.message?.extendedTextMessage?.text || '';
+        const args = rawText.trim().split(/\s+/);
+        const option = (args[1] || '').toLowerCase();
+
+        let data = getWelcomeData();
+        if (!data[chatId]) data[chatId] = { enabled: false };
+
+        if (option === 'on' || option === 'enable') {
+            data[chatId].enabled = true;
+            saveWelcomeData(data);
+            return await sock.sendMessage(chatId, { text: '✅ *Welcome messages are now ENABLED for this group!*' }, { quoted: message });
+        }
+
+        if (option === 'off' || option === 'disable') {
+            data[chatId].enabled = false;
+            saveWelcomeData(data);
+            return await sock.sendMessage(chatId, { text: '❌ *Welcome messages are now DISABLED for this group.*' }, { quoted: message });
+        }
+
+        const currentStatus = data[chatId].enabled ? 'ENABLED 🟢' : 'DISABLED 🔴';
+        await sock.sendMessage(chatId, { 
+            text: `⚙️ *WELCOME SETTINGS*\n\n📌 *Status:* ${currentStatus}\n\n💡 *Usage:*\n• \`.welcome on\` - Turn ON\n• \`.welcome off\` - Turn OFF` 
+        }, { quoted: message });
+
+    } catch (error) {
+        console.error('Error in welcomeCommand:', error.message);
+        await sock.sendMessage(chatId, { text: '❌ Failed to update welcome settings.' }, { quoted: message });
+    }
 }
 
 async function handleJoinEvent(sock, id, participants) {
-    // Check if welcome is enabled for this group
-    const isWelcomeEnabled = await isWelcomeOn(id);
-    if (!isWelcomeEnabled) return;
+    try {
+        if (!id.endsWith('@g.us')) return;
 
-    // Get custom welcome message
-    const customMessage = await getWelcome(id);
+        const data = getWelcomeData();
+        if (!data[id] || !data[id].enabled) return;
 
-    // Get group metadata
-    const groupMetadata = await sock.groupMetadata(id);
-    const groupName = groupMetadata.subject;
-    const groupDesc = groupMetadata.desc || 'No description available';
-
-    // Send welcome message for each new participant
-    for (const participant of participants) {
+        let groupMetadata = null;
         try {
-            // Handle case where participant might be an object or not a string
-            const participantString = typeof participant === 'string' ? participant : (participant.id || participant.toString());
-            const user = participantString.split('@')[0];
+            groupMetadata = await sock.groupMetadata(id);
+        } catch (e) {}
+
+        const groupName = groupMetadata?.subject || 'the group';
+
+        for (const participant of participants) {
+            const participantJid = typeof participant === 'string' ? participant : (participant.id || participant.toString());
             
-            // Get user's display name
-            let displayName = user; // Default to phone number
-            try {
-                const contact = await sock.getBusinessProfile(participantString);
-                if (contact && contact.name) {
-                    displayName = contact.name;
-                } else {
-                    // Try to get from group participants
-                    const groupParticipants = groupMetadata.participants;
-                    const userParticipant = groupParticipants.find(p => p.id === participantString);
-                    if (userParticipant && userParticipant.name) {
-                        displayName = userParticipant.name;
-                    }
-                }
-            } catch (nameError) {
-                console.log('Could not fetch display name, using phone number');
-            }
-            
-            // Process custom message with variables
-            let finalMessage;
-            if (customMessage) {
-                finalMessage = customMessage
-                    .replace(/{user}/g, `@${displayName}`)
-                    .replace(/{group}/g, groupName)
-                    .replace(/{description}/g, groupDesc);
-            } else {
-                // Default message if no custom message is set
-                const now = new Date();
-                const timeString = now.toLocaleString('en-US', {
-                    month: '2-digit',
-                    day: '2-digit', 
-                    year: 'numeric',
-                    hour: '2-digit',
-                    minute: '2-digit',
-                    second: '2-digit',
-                    hour12: true
-                });
-                
-                finalMessage = `╭╼━≪•𝙽𝙴𝚆 𝙼𝙴𝙼𝙱𝙴𝚁•≫━╾╮\n┃𝚆𝙴𝙻𝙲𝙾𝙼𝙴: @${displayName} 👋\n┃Member count: #${groupMetadata.participants.length}\n┃𝚃𝙸𝙼𝙴: ${timeString}⏰\n╰━━━━━━━━━━━━━━━╯\n\n*@${displayName}* Welcome to *${groupName}*! 🎉\n*Group 𝙳𝙴𝚂𝙲𝚁𝙸𝙿𝚃𝙸𝙾𝙽*\n${groupDesc}\n\n> *ᴘᴏᴡᴇʀᴇᴅ ʙʏ Knight Bot*`;
-            }
-            
-            // Try to send with image first (always try images)
-            try {
-                // Get user profile picture
-                let profilePicUrl = `https://img.pyrocdn.com/dbKUgahg.png`; // Default avatar
-                try {
-                    const profilePic = await sock.profilePictureUrl(participantString, 'image');
-                    if (profilePic) {
-                        profilePicUrl = profilePic;
-                    }
-                } catch (profileError) {
-                    console.log('Could not fetch profile picture, using default');
-                }
-                
-                // Construct API URL for welcome image
-                const apiUrl = `https://api.some-random-api.com/welcome/img/2/gaming3?type=join&textcolor=green&username=${encodeURIComponent(displayName)}&guildName=${encodeURIComponent(groupName)}&memberCount=${groupMetadata.participants.length}&avatar=${encodeURIComponent(profilePicUrl)}`;
-                
-                // Fetch the welcome image
-                const response = await fetch(apiUrl);
-                if (response.ok) {
-                    const imageBuffer = await response.buffer();
-                    
-                    // Send welcome image with caption (custom or default message)
-                    await sock.sendMessage(id, {
-                        image: imageBuffer,
-                        caption: finalMessage,
-                        mentions: [participantString],
-                        ...channelInfo
-                    });
-                    continue; // Skip to next participant
-                }
-            } catch (imageError) {
-                console.log('Image generation failed, falling back to text');
-            }
-            
-            // Send text message (either custom message or fallback)
+            const welcomeText = `Welcome to group ${groupName} @${participantJid.split('@')[0]}\nyou are precious to us`;
+
             await sock.sendMessage(id, {
-                text: finalMessage,
-                mentions: [participantString],
-                ...channelInfo
-            });
-        } catch (error) {
-            console.error('Error sending welcome message:', error);
-            // Fallback to text message
-            const participantString = typeof participant === 'string' ? participant : (participant.id || participant.toString());
-            const user = participantString.split('@')[0];
-            
-            // Use custom message if available, otherwise use simple fallback
-            let fallbackMessage;
-            if (customMessage) {
-                fallbackMessage = customMessage
-                    .replace(/{user}/g, `@${user}`)
-                    .replace(/{group}/g, groupName)
-                    .replace(/{description}/g, groupDesc);
-            } else {
-                fallbackMessage = `Welcome @${user} to ${groupName}! 🎉`;
-            }
-            
-            await sock.sendMessage(id, {
-                text: fallbackMessage,
-                mentions: [participantString],
-                ...channelInfo
+                text: welcomeText,
+                mentions: [participantJid]
             });
         }
+    } catch (error) {
+        console.error('Error in handleJoinEvent:', error.message);
     }
 }
 
