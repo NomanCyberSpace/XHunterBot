@@ -372,3 +372,15 @@ fs.watchFile(file, () => {
     delete require.cache[file]
     require(file)
 })
+
+// Prevent process from exiting prematurely (Keep Alive for Pterodactyl/Wispbyte containers)
+process.on('uncaughtException', (err) => {
+    console.error('Uncaught Exception:', err.message || err);
+});
+
+process.on('unhandledRejection', (reason) => {
+    console.error('Unhandled Rejection:', reason);
+});
+
+// Keep event loop active
+setInterval(() => {}, 1000 * 60 * 60);
