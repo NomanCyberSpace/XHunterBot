@@ -98,10 +98,19 @@ const usePairingCode = true;
 const useMobile = process.argv.includes("--mobile");
 
 // Readline setup for CLI Input
-const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-const question = (text) => new Promise((resolve) => rl.question(text, resolve));
+const rl = process.stdin.isTTY ? readline.createInterface({ input: process.stdin, output: process.stdout }) : null;
+const question = (text) => {
+    if (rl) {
+        return new Promise((resolve) => rl.question(text, resolve));
+    } else {
+        return Promise.resolve(settings.ownerNumber || '');
+    }
+};
+
+let isReconnecting = false;
 
 async function startXeonBotInc() {
+    if (isReconnecting) return;
     try {
         let { version, isLatest } = await fetchLatestBaileysVersion();
         const { state, saveCreds } = await useMultiFileAuthState(`./session`);
@@ -111,7 +120,7 @@ async function startXeonBotInc() {
             version,
             logger: pino({ level: 'silent' }),
             printQRInTerminal: false,
-            browser: ["Ubuntu", "Chrome", "20.0.04"],
+            browser: ["XHunter Linux", "Chrome", "124.0.0.0"],
             auth: {
                 creds: state.creds,
                 keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "fatal" }).child({ level: "fatal" })),
@@ -202,10 +211,16 @@ async function startXeonBotInc() {
         XeonBotInc.serializeM = (m) => smsg(XeonBotInc, m, store);
 
         // Pairing Code Safe Handling
+        let pairingCodeRequested = false;
         if (usePairingCode && !XeonBotInc.authState.creds.registered) {
             if (useMobile) throw new Error('Cannot use pairing code with mobile api');
 
-            let userPhone = await question(chalk.bgBlack(chalk.greenBright(`\nPlease type your WhatsApp number 😍\nFormat: 923462809972 (without + or spaces) : `)));
+            let userPhone = "";
+            if (rl) {
+                userPhone = await question(chalk.bgBlack(chalk.greenBright(`\nPlease type your WhatsApp number 😍\nFormat: 923462809972 (without + or spaces) : `)));
+            } else {
+                userPhone = settings.ownerNumber || "";
+            }
 
             userPhone = userPhone.replace(/[^0-9]/g, '');
             const pn = require('awesome-phonenumber');
@@ -216,22 +231,27 @@ async function startXeonBotInc() {
 
             console.log(chalk.yellow(`⏳ Requesting pairing code for +${userPhone}... Please wait.`));
 
-            // Socket connect hone par pairing code request generate karein
-            setTimeout(async () => {
-                try {
-                    let code = await XeonBotInc.requestPairingCode(userPhone);
-                    code = code?.match(/.{1,4}/g)?.join("-") || code;
-                    console.log(chalk.black(chalk.bgGreen(`\n🎉 YOUR PAIRING CODE FOR +${userPhone} : `)), chalk.bold.white(code), `\n`);
-                    console.log(chalk.cyan(`👉 Open WhatsApp > Linked Devices > Link with phone number > Enter code: ${code}\n`));
-                } catch (error) {
-                    console.error('❌ Error requesting pairing code:', error.message || error);
+            XeonBotInc.ev.on('connection.update', async (update) => {
+                const { connection } = update;
+                if ((connection === 'connecting' || connection === 'open') && !pairingCodeRequested) {
+                    pairingCodeRequested = true;
+                    await delay(6000);
+                    try {
+                        let code = await XeonBotInc.requestPairingCode(userPhone);
+                        code = code?.match(/.{1,4}/g)?.join("-") || code;
+                        console.log(chalk.black(chalk.bgGreen(`\n🎉 YOUR PAIRING CODE FOR +${userPhone} : `)), chalk.bold.white(code), `\n`);
+                        console.log(chalk.cyan(`👉 Open WhatsApp > Linked Devices > Link with phone number > Enter code: ${code}\n`));
+                    } catch (error) {
+                        console.error('❌ Error requesting pairing code:', error.message || error);
+                        pairingCodeRequested = false;
+                    }
                 }
-            }, 6000);
+            });
         }
 
         // Connection Handling
         XeonBotInc.ev.on('connection.update', async (s) => {
-            const { connection, lastDisconnect, qr } = s;
+            const { connection, lastDisconnect } = s;
 
             if (connection === 'connecting') {
                 console.log(chalk.yellow('🔄 Connecting to WhatsApp...'));
@@ -255,12 +275,24 @@ async function startXeonBotInc() {
 
             if (connection === 'close') {
                 const statusCode = lastDisconnect?.error?.output?.statusCode;
+                const errorMessage = lastDisconnect?.error?.message || '';
+                const isConflict = errorMessage.includes('conflict') || statusCode === 440;
                 const shouldReconnect = statusCode !== DisconnectReason.loggedOut && statusCode !== 401;
 
-                console.log(chalk.red(`Connection closed (${lastDisconnect?.error?.message || 'Unknown'}). Reconnecting: ${shouldReconnect}`));
+                console.log(chalk.red(`Connection closed (${errorMessage || 'Unknown'}). Reconnecting: ${shouldReconnect}`));
+
+                // Conflict Handling: Purana socket clean karke delay lein
+                if (isConflict) {
+                    console.log(chalk.red('⚠️ Stream Conflict detected! WhatsApp has another connection. Waiting 15s to clear socket...'));
+                    try { XeonBotInc.ws?.close(); } catch(e) {}
+                    await delay(15000);
+                    startXeonBotInc();
+                    return;
+                }
 
                 if (statusCode === DisconnectReason.loggedOut || statusCode === 401) {
                     console.log(chalk.red('Session logged out or expired. Please delete session folder and re-link.'));
+                    return;
                 }
 
                 if (shouldReconnect) {
