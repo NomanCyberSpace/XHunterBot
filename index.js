@@ -25,7 +25,8 @@ const {
     fetchLatestBaileysVersion,
     jidNormalizedUser,
     makeCacheableSignalKeyStore,
-    delay
+    delay,
+    Browsers
 } = require("@whiskeysockets/baileys");
 const NodeCache = require("node-cache");
 const pino = require("pino");
@@ -112,7 +113,7 @@ async function startXeonBotInc() {
             version,
             logger: pino({ level: 'silent' }),
             printQRInTerminal: false,
-            browser: ["Ubuntu", "Chrome", "20.0.04"],
+            browser: Browsers.macOS('Desktop'),
             auth: {
                 creds: state.creds,
                 keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "fatal" }).child({ level: "fatal" })),
@@ -159,7 +160,7 @@ async function startXeonBotInc() {
                 console.log(chalk.red(`Connection closed (${errorMessage || statusCode || 'Unknown'}). Reconnecting: ${shouldReconnect}`));
 
                 if (isConflict) {
-                    console.log(chalk.red('⚠️ Stream Conflict! Socket release hone ka intezaar... (15 seconds)'));
+                    console.log(chalk.red('⚠️ Stream Conflict! Waiting 15s...'));
                     try { sock.ws?.close(); } catch (e) {}
                     if (!isReconnecting) {
                         isReconnecting = true;
