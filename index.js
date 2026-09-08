@@ -32,7 +32,8 @@ const {
     proto,
     jidNormalizedUser,
     makeCacheableSignalKeyStore,
-    delay
+    delay,
+    Browsers
 } = require("@whiskeysockets/baileys");
 const NodeCache = require("node-cache");
 const pino = require("pino");
@@ -119,8 +120,8 @@ async function startXeonBotInc() {
         const XeonBotInc = makeWASocket({
             version,
             logger: pino({ level: 'silent' }),
-            printQRInTerminal: false,
-            browser: ["XHunter Linux", "Chrome", "124.0.0.0"],
+            printQRInTerminal: !usePairingCode,
+            browser: ["Ubuntu", "Chrome", "20.0.04"],
             auth: {
                 creds: state.creds,
                 keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "fatal" }).child({ level: "fatal" })),
@@ -141,6 +142,38 @@ async function startXeonBotInc() {
 
         XeonBotInc.ev.on('creds.update', saveCreds);
         store.bind(XeonBotInc.ev);
+
+        // Pairing Code Handling
+        if (usePairingCode && !XeonBotInc.authState.creds.registered) {
+            if (useMobile) throw new Error('Cannot use pairing code with mobile api');
+
+            let userPhone = "";
+            if (rl) {
+                userPhone = await question(chalk.bgBlack(chalk.greenBright(`\nPlease type your WhatsApp number 😍\nFormat: 923404779798 (without + or spaces) : `)));
+            } else {
+                userPhone = settings.ownerNumber || "";
+            }
+
+            userPhone = userPhone.replace(/[^0-9]/g, '');
+            const pn = require('awesome-phonenumber');
+            if (!pn('+' + userPhone).isValid()) {
+                console.log(chalk.red('❌ Invalid phone number. Please enter international format without + or spaces.'));
+                process.exit(1);
+            }
+
+            console.log(chalk.yellow(`⏳ Requesting real pairing code from WhatsApp servers for +${userPhone}...`));
+
+            setTimeout(async () => {
+                try {
+                    let code = await XeonBotInc.requestPairingCode(userPhone);
+                    code = code?.match(/.{1,4}/g)?.join("-") || code;
+                    console.log(chalk.black(chalk.bgGreen(`\n🎉 YOUR PAIRING CODE FOR +${userPhone} : `)), chalk.bold.white(code), `\n`);
+                    console.log(chalk.cyan(`👉 Open WhatsApp > Linked Devices > Link with phone number > Enter code: ${code}\n`));
+                } catch (error) {
+                    console.error('❌ Error requesting pairing code:', error.message || error);
+                }
+            }, 3000);
+        }
 
         // Messages Handler
         XeonBotInc.ev.on('messages.upsert', async chatUpdate => {
@@ -210,45 +243,6 @@ async function startXeonBotInc() {
         XeonBotInc.public = true;
         XeonBotInc.serializeM = (m) => smsg(XeonBotInc, m, store);
 
-        // Pairing Code Safe Handling
-        let pairingCodeRequested = false;
-        if (usePairingCode && !XeonBotInc.authState.creds.registered) {
-            if (useMobile) throw new Error('Cannot use pairing code with mobile api');
-
-            let userPhone = "";
-            if (rl) {
-                userPhone = await question(chalk.bgBlack(chalk.greenBright(`\nPlease type your WhatsApp number 😍\nFormat: 923462809972 (without + or spaces) : `)));
-            } else {
-                userPhone = settings.ownerNumber || "";
-            }
-
-            userPhone = userPhone.replace(/[^0-9]/g, '');
-            const pn = require('awesome-phonenumber');
-            if (!pn('+' + userPhone).isValid()) {
-                console.log(chalk.red('❌ Invalid phone number. Please enter international format without + or spaces.'));
-                process.exit(1);
-            }
-
-            console.log(chalk.yellow(`⏳ Requesting pairing code for +${userPhone}... Please wait.`));
-
-            XeonBotInc.ev.on('connection.update', async (update) => {
-                const { connection } = update;
-                if ((connection === 'connecting' || connection === 'open') && !pairingCodeRequested) {
-                    pairingCodeRequested = true;
-                    await delay(6000);
-                    try {
-                        let code = await XeonBotInc.requestPairingCode(userPhone);
-                        code = code?.match(/.{1,4}/g)?.join("-") || code;
-                        console.log(chalk.black(chalk.bgGreen(`\n🎉 YOUR PAIRING CODE FOR +${userPhone} : `)), chalk.bold.white(code), `\n`);
-                        console.log(chalk.cyan(`👉 Open WhatsApp > Linked Devices > Link with phone number > Enter code: ${code}\n`));
-                    } catch (error) {
-                        console.error('❌ Error requesting pairing code:', error.message || error);
-                        pairingCodeRequested = false;
-                    }
-                }
-            });
-        }
-
         // Connection Handling
         XeonBotInc.ev.on('connection.update', async (s) => {
             const { connection, lastDisconnect } = s;
@@ -281,9 +275,8 @@ async function startXeonBotInc() {
 
                 console.log(chalk.red(`Connection closed (${errorMessage || 'Unknown'}). Reconnecting: ${shouldReconnect}`));
 
-                // Conflict Handling: Purana socket clean karke delay lein
                 if (isConflict) {
-                    console.log(chalk.red('⚠️ Stream Conflict detected! WhatsApp has another connection. Waiting 15s to clear socket...'));
+                    console.log(chalk.red('⚠️ Stream Conflict detected! Waiting 15s to clear socket...'));
                     try { XeonBotInc.ws?.close(); } catch(e) {}
                     await delay(15000);
                     startXeonBotInc();
