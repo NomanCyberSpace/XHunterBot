@@ -44,7 +44,7 @@ let latestQrData = null;
 // Express Web Server
 // ==========================================
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 16239;
 
 app.get('/', async (req, res) => {
     if (!latestQrData) {
