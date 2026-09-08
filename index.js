@@ -23,17 +23,9 @@ const {
     useMultiFileAuthState,
     DisconnectReason,
     fetchLatestBaileysVersion,
-    generateForwardMessageContent,
-    prepareWAMessageMedia,
-    generateWAMessageFromContent,
-    generateMessageID,
-    downloadContentFromMessage,
-    jidDecode,
-    proto,
     jidNormalizedUser,
     makeCacheableSignalKeyStore,
-    delay,
-    Browsers
+    delay
 } = require("@whiskeysockets/baileys");
 const NodeCache = require("node-cache");
 const pino = require("pino");
@@ -50,8 +42,8 @@ app.get('/', async (req, res) => {
     if (!latestQrData) {
         return res.send(`
             <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:90vh;font-family:sans-serif;">
-                <h2>🤖 XHUNTERBOT is Connected or Generating QR...</h2>
-                <p>Agar QR nahi dikh raha to page refresh karein.</p>
+                <h2>🤖 Bot Status: Online ya QR generate ho raha hai...</h2>
+                <p>Agar QR nahi dikh raha to 5 second baad page reload karein.</p>
             </div>
         `);
     }
@@ -60,10 +52,10 @@ app.get('/', async (req, res) => {
         const qrImage = await qrcode.toDataURL(latestQrData);
         res.send(`
             <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:90vh;font-family:sans-serif;">
-                <h2>Scan QR with WhatsApp</h2>
-                <p>Settings > Linked Devices > Link a Device</p>
-                <img src="${qrImage}" style="width:300px;height:300px;border:2px solid #333;padding:10px;border-radius:8px;" />
-                <script>setTimeout(() => location.reload(), 15000);</script>
+                <h2>Scan QR Code</h2>
+                <img src="${qrImage}" style="width:300px;height:300px;border:2px solid #25D366;padding:10px;border-radius:12px;" />
+                <p style="margin-top:15px;color:#666;">Page 10 seconds mein auto-reload hoga</p>
+                <script>setTimeout(() => location.reload(), 10000);</script>
             </div>
         `);
     } catch (err) {
@@ -77,29 +69,25 @@ app.listen(PORT, '0.0.0.0', () => {
 
 const mongoose = require('mongoose');
 const mongoUri = process.env.MONGODB_URL || (settings && settings.MONGODB_URL);
-
 if (mongoUri) {
     mongoose.connect(mongoUri)
-        .then(() => console.log(chalk.green('✅ MongoDB Connected Successfully!')))
-        .catch((err) => console.error(chalk.red('❌ MongoDB Connection Error:'), err));
-} else {
-    console.log(chalk.yellow('⚠️ MONGODB_URL variable not set in environment or settings.'));
+        .then(() => console.log(chalk.green('✅ MongoDB Connected!')))
+        .catch((err) => console.error(chalk.red('❌ MongoDB Error:'), err));
 }
 
 const store = require('./lib/lightweight_store');
 store.readFromFile();
 setInterval(() => store.writeToFile(), settings.storeWriteInterval || 10000);
 
-let isReconnecting = false;
+let sock = null;
 
 async function startXeonBotInc() {
-    if (isReconnecting) return;
     try {
         let { version } = await fetchLatestBaileysVersion();
         const { state, saveCreds } = await useMultiFileAuthState(`./session`);
         const msgRetryCounterCache = new NodeCache();
 
-        const XeonBotInc = makeWASocket({
+        sock = makeWASocket({
             version,
             logger: pino({ level: 'silent' }),
             printQRInTerminal: false,
@@ -109,24 +97,18 @@ async function startXeonBotInc() {
                 keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "fatal" }).child({ level: "fatal" })),
             },
             markOnlineOnConnect: true,
-            generateHighQualityLinkPreview: true,
             syncFullHistory: false,
-            getMessage: async (key) => {
-                let jid = jidNormalizedUser(key.remoteJid);
-                let msg = await store.loadMessage(jid, key.id);
-                return msg?.message || "";
-            },
             msgRetryCounterCache,
             defaultQueryTimeoutMs: 60000,
             connectTimeoutMs: 60000,
-            keepAliveIntervalMs: 10000,
+            keepAliveIntervalMs: 25000,
         });
 
-        XeonBotInc.ev.on('creds.update', saveCreds);
-        store.bind(XeonBotInc.ev);
+        sock.ev.on('creds.update', saveCreds);
+        store.bind(sock.ev);
 
-        XeonBotInc.ev.on('connection.update', async (s) => {
-            const { connection, lastDisconnect, qr } = s;
+        sock.ev.on('connection.update', async (update) => {
+            const { connection, lastDisconnect, qr } = update;
 
             if (qr) {
                 latestQrData = qr;
@@ -137,38 +119,44 @@ async function startXeonBotInc() {
                 console.log(chalk.yellow('🔄 Connecting to WhatsApp...'));
             }
 
-            if (connection === "open") {
+            if (connection === 'open') {
                 latestQrData = null;
-                console.log(chalk.green(`🤖 Bot Connected Successfully! ✅`));
+                console.log(chalk.green('🤖 Bot Connected Successfully! ✅'));
             }
 
             if (connection === 'close') {
-                const statusCode = lastDisconnect?.error?.output?.statusCode;
-                const shouldReconnect = statusCode !== DisconnectReason.loggedOut && statusCode !== 401;
+                latestQrData = null;
+                const statusCode = (new Boom(lastDisconnect?.error))?.output?.statusCode;
+                const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
+
+                console.log(chalk.red(`Connection closed. Reason Code: ${statusCode}. Reconnecting: ${shouldReconnect}`));
+
+                if (statusCode === DisconnectReason.loggedOut) {
+                    console.log(chalk.red('Device logged out. Session folder delete karein aur dobara scan karein.'));
+                    return;
+                }
 
                 if (shouldReconnect) {
                     console.log(chalk.yellow('Reconnecting in 5 seconds...'));
-                    await delay(5000);
-                    startXeonBotInc();
+                    setTimeout(() => startXeonBotInc(), 5000);
                 }
             }
         });
 
-        XeonBotInc.ev.on('messages.upsert', async chatUpdate => {
+        sock.ev.on('messages.upsert', async chatUpdate => {
             try {
                 const mek = chatUpdate.messages[0];
                 if (!mek || !mek.message) return;
-                await handleMessages(XeonBotInc, chatUpdate, true);
+                await handleMessages(sock, chatUpdate, true);
             } catch (err) {
                 console.error("Error in handleMessages:", err);
             }
         });
 
-        return XeonBotInc;
+        return sock;
     } catch (error) {
         console.error('Error in startXeonBotInc:', error);
-        await delay(5000);
-        startXeonBotInc();
+        setTimeout(() => startXeonBotInc(), 5000);
     }
 }
 
