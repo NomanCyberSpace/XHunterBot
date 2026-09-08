@@ -25,13 +25,13 @@ const {
     fetchLatestBaileysVersion,
     jidNormalizedUser,
     makeCacheableSignalKeyStore,
-    delay,
-    Browsers
+    delay
 } = require("@whiskeysockets/baileys");
 const NodeCache = require("node-cache");
 const pino = require("pino");
 
 let latestQrData = null;
+const SESSION_DIR = path.join(__dirname, 'session');
 
 // ==========================================
 // Express Web Server
@@ -86,9 +86,7 @@ setInterval(() => store.writeToFile(), settings.storeWriteInterval || 10000);
 
 // Memory Optimization
 setInterval(() => {
-    if (global.gc) {
-        global.gc();
-    }
+    if (global.gc) global.gc();
 }, 60_000);
 
 setInterval(() => {
@@ -102,18 +100,35 @@ setInterval(() => {
 let sock = null;
 let isReconnecting = false;
 
+function cleanSession() {
+    try {
+        if (fs.existsSync(SESSION_DIR)) {
+            fs.rmSync(SESSION_DIR, { recursive: true, force: true });
+            console.log(chalk.yellow('🧹 Corrupted session cleared automatically.'));
+        }
+    } catch (err) {
+        console.error('Session clean error:', err);
+    }
+}
+
 async function startXeonBotInc() {
     if (isReconnecting) return;
     try {
-        let { version } = await fetchLatestBaileysVersion();
-        const { state, saveCreds } = await useMultiFileAuthState(`./session`);
+        if (sock?.ws) {
+            try { sock.ws.close(); } catch (_) {}
+            sock = null;
+        }
+
+        let { version, isLatest } = await fetchLatestBaileysVersion();
+        const { state, saveCreds } = await useMultiFileAuthState(SESSION_DIR);
         const msgRetryCounterCache = new NodeCache();
 
         sock = makeWASocket({
             version,
             logger: pino({ level: 'silent' }),
             printQRInTerminal: false,
-            browser: Browsers.macOS('Desktop'),
+            // Linux container compatibility browser fingerprint
+            browser: ['Ubuntu', 'Chrome', '20.0.04'],
             auth: {
                 creds: state.creds,
                 keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "fatal" }).child({ level: "fatal" })),
@@ -122,9 +137,9 @@ async function startXeonBotInc() {
             syncFullHistory: false,
             generateHighQualityLinkPreview: false,
             msgRetryCounterCache,
-            defaultQueryTimeoutMs: 90000,
-            connectTimeoutMs: 90000,
-            keepAliveIntervalMs: 15000,
+            defaultQueryTimeoutMs: 60000,
+            connectTimeoutMs: 60000,
+            keepAliveIntervalMs: 25000,
             emitOwnEvents: false,
             fireInitQueries: true
         });
@@ -154,26 +169,34 @@ async function startXeonBotInc() {
                 latestQrData = null;
                 const statusCode = (new Boom(lastDisconnect?.error))?.output?.statusCode;
                 const errorMessage = lastDisconnect?.error?.message || '';
+                const isInvalidSignature = errorMessage.toLowerCase().includes('signature');
                 const isConflict = errorMessage.includes('conflict') || statusCode === 440;
-                const shouldReconnect = statusCode !== DisconnectReason.loggedOut && statusCode !== 401;
+                const shouldReconnect = statusCode !== DisconnectReason.loggedOut && statusCode !== 401 && !isInvalidSignature;
 
                 console.log(chalk.red(`Connection closed (${errorMessage || statusCode || 'Unknown'}). Reconnecting: ${shouldReconnect}`));
 
-                if (isConflict) {
-                    console.log(chalk.red('⚠️ Stream Conflict! Waiting 15s...'));
-                    try { sock.ws?.close(); } catch (e) {}
+                if (isInvalidSignature || statusCode === DisconnectReason.loggedOut || statusCode === 401) {
+                    console.log(chalk.red('Session invalid/expired ho gayi hai. Auto-clearing session...'));
+                    cleanSession();
                     if (!isReconnecting) {
                         isReconnecting = true;
                         setTimeout(() => {
                             isReconnecting = false;
                             startXeonBotInc();
-                        }, 15000);
+                        }, 3000);
                     }
                     return;
                 }
 
-                if (statusCode === DisconnectReason.loggedOut || statusCode === 401) {
-                    console.log(chalk.red('Session expired ho chuka hai. Session folder clear karke dobara scan karein.'));
+                if (isConflict) {
+                    console.log(chalk.red('⚠️ Stream Conflict! Waiting 10s...'));
+                    if (!isReconnecting) {
+                        isReconnecting = true;
+                        setTimeout(() => {
+                            isReconnecting = false;
+                            startXeonBotInc();
+                        }, 10000);
+                    }
                     return;
                 }
 
